@@ -56,6 +56,55 @@ def test_load_invalid_config(tmp_path):
         load_config(dst)
 
 
+def test_unknown_top_level_key_rejected(tmp_path):
+    dst = tmp_path / "config.yaml"
+    shutil.copy(FIXTURE, dst)
+    dst.write_text(
+        dst.read_text(encoding="utf-8") + "\nnotes: keep me\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigError):
+        load_config(dst)
+
+
+def test_unknown_nested_key_rejected(tmp_path):
+    dst = tmp_path / "config.yaml"
+    dst.write_text(
+        "xteink:\n"
+        "  username: u\n"
+        "  password: p\n"
+        "feeds:\n"
+        "  - id: a\n"
+        "    url: https://a.example/rss\n"
+        "    ful_text: true\n"
+        "tasks:\n"
+        "  - id: t\n"
+        "    name: T\n"
+        "    feeds: [a]\n"
+        "    schedule: '0 7 * * *'\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(dst)
+
+
+def test_write_over_empty_file(tmp_path):
+    dst = tmp_path / "config.yaml"
+    src_cfg = load_config_fixture(tmp_path)
+    dst.write_bytes(b"")
+    write_config(dst, src_cfg)
+    assert load_config(dst).tasks[0].id == "brief"
+
+
+def test_write_over_broken_yaml(tmp_path):
+    dst = tmp_path / "config.yaml"
+    src_cfg = load_config_fixture(tmp_path)
+    dst.write_text("not: [valid yaml", encoding="utf-8")
+    write_config(dst, src_cfg)
+    reloaded = load_config(dst)
+    assert reloaded.tasks[0].id == "brief"
+    assert [f.id for f in reloaded.feeds] == ["hn"]
+
+
 def test_write_roundtrip_values(tmp_path):
     dst = tmp_path / "config.yaml"
     shutil.copy(FIXTURE, dst)
