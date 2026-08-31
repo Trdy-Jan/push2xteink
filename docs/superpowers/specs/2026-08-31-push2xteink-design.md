@@ -368,3 +368,13 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - EPUB 章节内的图片：先不下载内嵌，保留/剥离 `<img>` 待实现时定（倾向剥离，e-ink 意义不大）
 - `qps` 限流的实现（简单 sleep 间隔即可）
 - Web 端口、默认 lookback 等常量的最终取值
+
+## 13. P1 实现后补充（终审发现，供 P2–P6）
+
+- **配置注释保留（修订第 8 节措辞）**：`write_config` 现按段落级 key 重写，只保证**文件头注释和段落注释**保留；`feeds:` / `tasks:` 列表项的**行内联注释在整体重写时会丢失**。P1 已通过 `extra="forbid"`（未知 key 在 load 阶段报错）堵住「网页保存抹掉手写内容」的数据丢失风险。**P5 增加一个任务**：改为递归合并进现有 `CommentedMap`、只增删列表项、原地改叶子标量，以完整保留注释。
+- **APScheduler 星期字段**：`CronTrigger.from_crontab("... 0")` 中 `0` 是**周一**（APScheduler 3.x），非标准 cron 的周日。校验与执行都用同一 `CronTrigger` 所以自洽；但 P4/P5 的「人类可读预览」必须按 APScheduler 语义生成，否则会与用户查的 crontab 手册不一致。P4 决定：要么在文档里标注，要么在校验层把星期字段归一化成标准 cron。
+- **`DEFAULT_PROMPT` 与 P2c 的契约**：当前 `DEFAULT_PROMPT` 只是一句指令，没有文章正文占位符。P2c 规划时定清楚 `summarize.py` 如何拼装（system message？`prompt + "\n\n" + 正文`？），并在 prompt 模板里显式留正文位置。
+- **`seen_items` 无限增长**：无清理逻辑。P4/P6（谁负责运维）加一个按 `first_seen_at` 的定期 prune。
+- **`State` 已线程安全**：`check_same_thread=False` + WAL + `busy_timeout=5000` + 每方法一把 `threading.Lock`。P3/P4/P5 可安全在多线程（FastAPI 请求线程 + APScheduler worker）共享同一个 `State` 实例，无需每线程新建。
+- **数值下限已在模型层强制**：`qps` / `timeout_seconds` / `concurrency` / `first_run_lookback_hours` 均 `> 0`，`max_retries >= 0`。P2c 的 `1/qps` 限流器不会遇到 0。
+- **`runs.status` 有 DB CHECK 约束**：只接受 `running|success|skipped|failed`。`finish_run` 的 `status` 参数是 `Literal`。注意 CHECK 只对新建 DB 生效，P1 尚无迁移机制——后续若改 `_SCHEMA` 需要迁移策略。
