@@ -347,6 +347,8 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 
 首次启动若 `config.yaml` 不存在 → 写一份带注释的样例并提示用户填写。
 
+**P3 现状**：`python -m push2xteink` 目前**必须带子命令**（`run <task_id>` / `list`），无子命令时打印友好提示并 `exit 2`。容器入口的 `serve`（Web + 调度器）在 **P4** 落地，届时 `serve` 成为**默认子命令**（`CMD python -m push2xteink` 不带参数即启动常驻服务）。
+
 ## 11. 测试策略（TDD）
 
 | 层 | 方法 |
@@ -388,3 +390,10 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **`ProxyConfig.url` 无 scheme 校验**：`http://` / `socks5://` 前缀写错（如 `127.0.0.1:7890`）在 P2 只会在运行时被各模块捕获成 per-feed 警告（已加 `ValueError` 到 guard）。**P4/P5 在 config load 阶段校验 scheme**，让用户改配置时立刻报错。
 - **`xteink` 上传对非预期响应体已全部收敛为 `XteinkUploadError`**：login/signature/callback 三处 JSON 解析都过 `_json_dict`（非 JSON body、非 dict body、缺字段、`success:false` 都抛 `XteinkUploadError`）。P3 的失败隔离 `except XteinkUploadError` 可靠。
 - **已知延后的小项**（不阻塞 P3）：`Summarizer` 重试无退避（默认 qps=1 时恰好有 1s 间隔）；`safe_filename` 按码点而非字节截断（超长 CJK 任务名可能超 255 字节 `NAME_MAX`）；`select_new_articles(state, feed_id, articles, ...)` 的 `feed_id` 参数与 `Article.feed_id` 冗余。
+
+## P3 实现后补充（整体复审发现，供 P4–P6）
+
+- **I5 —— `Pipeline.close()` 与在飞的 `run_task` 竞态**：`close()` 会关掉 `Summarizer` / `XteinkClient` 的 httpx client；若某个 `run_task` 正在跑，config reload 时直接 `close()` 旧实例会让在飞的 run 报 `ClientClosed`。**P4 硬性要求**：reload 流程为 `scheduler.pause()` → 等待活跃 job 排空（`ThreadPoolExecutor` join / APScheduler `get_jobs` 轮询）→ `close()` 旧 `Pipeline` → 用新 config 重建 → `scheduler.resume()`。P3 的 CLI 单跑模式无此问题（进程内只有一个 run）。
+- **M3 —— 超长非 ASCII `task.name` 撑爆 `NAME_MAX`**：`_build` 的标题 `f"{task.name}_{now:%Y%m%d}"` 经 `safe_filename` 按码点截断；30+ 个 CJK 字符的任务名 UTF-8 编码后可能超 255 字节。**P1 follow-up（models.py）**：给 `Task.name` 加 `Field(..., max_length=60)`，在 config load 阶段就报错。属 P1 改动，此处仅记录。
+- **M8 —— 极短正文（RSS 摘要）跳过 AI 摘要**：不少 feed 的 `content_html` 本身就是一两句话的 blurb，再喂给 LLM 摘要既费钱又无收益。P4/P5 可在 `_prepare` 里对 `html_to_text` 后长度低于阈值（如 200 字）的文章直接跳过 `summarize`。成本优化，非正确性问题。
+- **APScheduler worker 池上限**：每个 job 内部 `_prepare` 会各自 fan out 一个 `ThreadPoolExecutor(fetch.concurrency)`。P4 配置调度器时必须把 executor 的 `max_workers` 压到 3–5，否则 N 个任务并发时线程数是 `N × concurrency`，会打爆下游 feed / AI 接口的限流。
