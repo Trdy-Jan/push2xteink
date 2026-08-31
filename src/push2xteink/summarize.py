@@ -78,7 +78,7 @@ class Summarizer:
                 )
             except (httpx.HTTPError, SummarizeError) as exc:
                 last = exc
-        raise SummarizeError(str(last)) from last
+        raise SummarizeError(" ".join(str(last).split())) from last
 
     def summarize(self, text: str) -> str:
         messages = build_messages(self._cfg.prompt, text)

@@ -61,3 +61,43 @@ def test_summarize_malformed_response_raises():
     )
     with pytest.raises(SummarizeError):
         Summarizer(_cfg(max_retries=0)).summarize("body")
+
+
+@respx.mock
+def test_primary_fails_fallback_succeeds():
+    respx.post("https://api.primary/v1/chat/completions").mock(return_value=httpx.Response(500))
+    fb = respx.post("https://api.fallback/v1/chat/completions").mock(return_value=_chat_ok("摘要"))
+    cfg = _cfg(
+        fallback=AIProvider(base_url="https://api.fallback/v1", api_key="k2", model="m2"),
+        max_retries=1,
+    )
+    assert Summarizer(cfg).summarize("body") == "摘要"
+    assert fb.called
+
+
+@respx.mock
+def test_both_fail_raises_with_both_messages():
+    respx.post("https://api.primary/v1/chat/completions").mock(return_value=httpx.Response(500))
+    respx.post("https://api.fallback/v1/chat/completions").mock(side_effect=httpx.ConnectError("x"))
+    cfg = _cfg(
+        fallback=AIProvider(base_url="https://api.fallback/v1", api_key="k2", model="m2"),
+        max_retries=0,
+    )
+    with pytest.raises(SummarizeError, match="primary failed.*fallback failed"):
+        Summarizer(cfg).summarize("body")
+
+
+@respx.mock
+def test_retry_count_is_max_retries_plus_one():
+    route = respx.post("https://api.primary/v1/chat/completions").mock(return_value=httpx.Response(503))
+    with pytest.raises(SummarizeError):
+        Summarizer(_cfg(max_retries=2)).summarize("body")
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_transient_then_success_within_retries():
+    route = respx.post("https://api.primary/v1/chat/completions")
+    route.side_effect = [httpx.Response(503), _chat_ok("ok")]
+    assert Summarizer(_cfg(max_retries=2)).summarize("body") == "ok"
+    assert route.call_count == 2
