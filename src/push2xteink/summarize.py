@@ -37,7 +37,10 @@ def _call_provider(
             },
         )
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise SummarizeError(f"non-JSON response body: {resp.text[:200]!r}") from exc
     try:
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:

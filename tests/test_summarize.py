@@ -126,3 +126,24 @@ def test_first_call_not_throttled(monkeypatch):
     monkeypatch.setattr("push2xteink.summarize.time.monotonic", lambda: 1000.0)
     Summarizer(_cfg(qps=1.0)).summarize("a")
     assert sleeps == []
+
+
+@respx.mock
+def test_non_json_200_body_raises_summarize_error():
+    respx.post("https://api.primary/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text="<html>gateway error</html>")
+    )
+    with pytest.raises(SummarizeError):
+        Summarizer(_cfg(max_retries=0)).summarize("body")
+
+
+def test_proxy_only_applied_when_use_proxy_true():
+    off = Summarizer(_cfg(use_proxy=False), proxy_url="http://p:1")
+    assert off._proxy is None
+    on = Summarizer(_cfg(use_proxy=True), proxy_url="http://p:1")
+    assert on._proxy == "http://p:1"
+
+
+def test_build_messages_default_truncation_is_12000():
+    msgs = build_messages("SYS", "x" * 20000)
+    assert len(msgs[1]["content"]) == 12000
