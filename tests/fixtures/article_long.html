@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>A Long Article About Testing</title>
+</head>
+<body>
+  <nav id="site-nav">
+    <a href="/">Home</a> <a href="/about">About</a> <a href="/archive">Archive</a>
+  </nav>
+  <header><h1>A Long Article About Testing</h1></header>
+  <article>
+    <p>Software testing is the discipline of checking that a program behaves the way its authors intended. It ranges from tiny unit checks that pin down a single function to sprawling end to end suites that drive a whole application the way a user would.</p>
+    <p>A good test tells a story. It sets up a small world, performs one meaningful action, and then asserts that the world changed in exactly the way the specification promised. When it fails, the failure message should point almost directly at the defect.</p>
+    <p>Test driven development inverts the usual order of work. You write the failing test first, watch it fail for the right reason, and only then write the smallest amount of code that turns the bar green. The rhythm keeps the design honest and the coverage close to complete.</p>
+    <p>Fixtures matter more than people expect. A fixture that is too clever hides the very behaviour you are trying to demonstrate, while a fixture that is too bare forces every test to repeat the same tedious setup. The middle path is a small, readable seed of data.</p>
+    <p>Mocking the network is a practical necessity for feed and extraction code. Real requests make a suite slow, flaky, and dependent on servers you do not control. A recorded response served from a local file gives you determinism without giving up realism.</p>
+    <p>Finally, remember that tests are code too. They deserve refactoring, naming care, and review. A suite that is pleasant to read is a suite that people will keep running, and a suite that people keep running is the only kind that actually protects you.</p>
+  </article>
+  <footer id="site-footer">
+    <p>Copyright 2026 Example Media. All rights reserved.</p>
+  </footer>
+  <script>console.log("analytics");</script>
+</body>
+</html>
