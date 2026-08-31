@@ -176,3 +176,49 @@ def test_prepare_summary_failure_is_warned_and_skipped(pipeline_config, tmp_path
     assert all(a.summary is None for a in out)
     assert len(warnings) == 2 and all("summary failed" in w for w in warnings)
     s.close()
+
+
+# --- Task 4: _build -------------------------------------------------------
+
+from push2xteink.builders.common import BuildError  # noqa: E402
+
+
+def test_build_epub_default_title(pipeline_config, tmp_path):
+    s = State(tmp_path / "s.db")
+    arts = [_art("a", "a1")]
+    # give the article real body so EPUB clears the 256B floor
+    arts[0].content_html = "<p>" + "长正文内容。" * 50 + "</p>"
+    p = _pipe(pipeline_config, s)
+    path = p._build(pipeline_config.tasks[0], arts, now=NOW, out_dir=tmp_path)
+    assert path.name == "早报_20260831.epub"
+    s.close()
+
+
+def test_build_txt_for_txt_task(pipeline_config, tmp_path):
+    s = State(tmp_path / "s.db")
+    p = _pipe(pipeline_config, s)
+    path = p._build(pipeline_config.tasks[1], [_art("a", "a1")], now=NOW, out_dir=tmp_path)
+    assert path.name == "纯文_20260831.txt" and path.read_text(encoding="utf-8")
+    s.close()
+
+
+def test_build_appends_time_on_same_day_rerun(pipeline_config, tmp_path):
+    s = State(tmp_path / "s.db")
+    rid = s.start_run("plain", now=NOW)
+    s.finish_run(rid, status="success", now=NOW)
+    p = _pipe(pipeline_config, s)
+    later = NOW.replace(hour=15, minute=30, second=45)
+    path = p._build(pipeline_config.tasks[1], [_art("a", "a1")], now=later, out_dir=tmp_path)
+    assert path.name == "纯文_20260831_153045.txt"
+    s.close()
+
+
+def test_build_error_propagates(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.build_epub",
+                        lambda *a, **k: (_ for _ in ()).throw(BuildError("too small")))
+    p = _pipe(pipeline_config, s)
+    import pytest
+    with pytest.raises(BuildError):
+        p._build(pipeline_config.tasks[0], [_art("a", "a1")], now=NOW, out_dir=tmp_path)
+    s.close()

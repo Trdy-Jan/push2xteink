@@ -5,7 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .builders import html_to_text
+from .builders import build_epub, build_txt, html_to_text
+from .builders.common import BuildError
 from .extract import apply_full_text
 from .feeds import fetch_feed, select_new_articles
 from .models import Article, Config, Feed, Task
@@ -141,6 +142,28 @@ class Pipeline:
                 except SummarizeError as exc:
                     warnings.append(f"summary failed for {article.link}: {exc}")
         return articles
+
+    # --- step 5: build file ---
+    def _same_day_success(self, task_id: str, now: datetime) -> bool:
+        day = now.strftime("%Y-%m-%d")
+        for row in self._state.recent_runs(200):
+            if (
+                row["task_id"] == task_id
+                and row["status"] == "success"
+                and str(row["started_at"]).startswith(day)
+            ):
+                return True
+        return False
+
+    def _build(
+        self, task: Task, articles: list[Article], *, now: datetime, out_dir: Path
+    ) -> Path:
+        title = f"{task.name}_{now:%Y%m%d}"
+        if self._same_day_success(task.id, now):
+            title = f"{title}_{now:%H%M%S}"
+        if task.format == "epub":
+            return build_epub(title, articles, out_dir=out_dir)
+        return build_txt(title, articles, out_dir=out_dir)
 
     def run_task(self, task_id: str, *, now=None) -> RunOutcome:  # Task 5
         raise NotImplementedError
