@@ -17,7 +17,7 @@ class _Stripper(HTMLParser):
         self._parts: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        if tag == "br":
+        if tag in _BREAK_TAGS:
             self._parts.append("\n")
 
     def handle_startendtag(self, tag, attrs):
@@ -33,8 +33,15 @@ class _Stripper(HTMLParser):
 
     def text(self) -> str:
         raw = "".join(self._parts)
-        lines = [ln.strip() for ln in raw.splitlines()]
-        return "\n".join(ln for ln in lines if ln).strip()
+        out: list[str] = []
+        for ln in (line.strip() for line in raw.splitlines()):
+            if ln:
+                out.append(ln)
+            elif out and out[-1] != "":
+                out.append("")  # collapse runs of blank lines to exactly one
+        while out and out[-1] == "":
+            out.pop()
+        return "\n".join(out)
 
 
 def _strip_html(html: str) -> str:

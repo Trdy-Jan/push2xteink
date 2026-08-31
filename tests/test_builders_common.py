@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from push2xteink.builders.common import (
-    BuildError, chapter_body_html, format_published, safe_filename,
+    chapter_body_html, format_published, safe_filename,
 )
 from push2xteink.models import Article
 
