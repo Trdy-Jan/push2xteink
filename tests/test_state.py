@@ -1,3 +1,5 @@
+import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -108,4 +110,52 @@ def test_recent_runs_ordered_desc(tmp_path):
     r2 = s.start_run("b", now=NOW + timedelta(minutes=1))
     ids = [row["id"] for row in s.recent_runs(10)]
     assert ids == [r2, r1]
+    s.close()
+
+
+def test_record_seen_is_thread_safe(tmp_path):
+    s = State(tmp_path / "s.db")
+    errors: list[BaseException] = []
+
+    def worker(guid: str) -> None:
+        try:
+            for _ in range(50):
+                s.record_seen("hn", guid, now=NOW)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t1 = threading.Thread(target=worker, args=("g1",))
+    t2 = threading.Thread(target=worker, args=("g2",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert errors == []
+    assert s.is_item_pushable("hn", "g1", 48, now=NOW) is True
+    assert s.is_item_pushable("hn", "g2", 48, now=NOW) is True
+    s.close()
+
+
+def test_naive_datetimes_are_normalized_to_utc(tmp_path):
+    s = State(tmp_path / "s.db")
+    s.record_seen("hn", "g1", now=datetime(2026, 8, 31, 12, 0))
+    assert (
+        s.is_item_pushable(
+            "hn", "g1", 48, now=datetime(2026, 8, 31, 13, 0)
+        )
+        is True
+    )
+    row = s._conn.execute(
+        "SELECT first_seen_at FROM seen_items WHERE feed_id='hn' AND item_guid='g1'"
+    ).fetchone()
+    assert row["first_seen_at"] == "2026-08-31T12:00:00+00:00"
+    s.close()
+
+
+def test_finish_run_rejects_unknown_status(tmp_path):
+    s = State(tmp_path / "s.db")
+    rid = s.start_run("brief", now=NOW)
+    with pytest.raises(sqlite3.IntegrityError):
+        s.finish_run(rid, status="bogus", now=NOW)
     s.close()
