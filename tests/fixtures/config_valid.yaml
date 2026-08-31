@@ -1,0 +1,23 @@
+# push2xteink config
+xteink:
+  username: "15800000000"
+  password: "secret"
+
+ai:
+  primary:
+    base_url: https://api.example.com/v1
+    api_key: sk-test
+    model: gpt-4o-mini
+
+feeds:
+  - id: hn
+    url: https://news.ycombinator.com/rss
+    full_text: true
+
+tasks:
+  - id: brief
+    name: 早报
+    feeds: [hn]
+    schedule: "0 7 * * *"
+    summarize: true
+    format: epub
