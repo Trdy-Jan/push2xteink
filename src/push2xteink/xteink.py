@@ -6,10 +6,10 @@ from pathlib import Path
 
 import httpx
 
+from .http import make_client
 from .models import XteinkConfig
 from .state import State
 
-_UA = {"User-Agent": "push2xteink/0.1"}
 _CONTENT_TYPES = {".epub": "application/epub+zip", ".txt": "text/plain"}
 _TOKEN_KEY = "xteink_access_token"
 _TOKEN_TS_KEY = "xteink_token_obtained_at"
@@ -30,19 +30,50 @@ class XteinkClient:
         self._state = state
         self._timeout = timeout
         self._api = config.api_base.rstrip("/")
+        self._api_client = make_client(timeout=timeout)
+        self._oss_client = make_client(timeout=timeout)
+
+    def close(self) -> None:
+        for attr in ("_api_client", "_oss_client"):
+            client = getattr(self, attr, None)
+            if client is not None:
+                client.close()
+
+    def __enter__(self) -> XteinkClient:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _json_dict(resp: httpx.Response, step: str) -> dict:
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise XteinkUploadError(
+                f"{step} returned non-JSON body: {resp.text[:200]!r}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise XteinkUploadError(f"{step} returned non-object JSON: {data!r}")
+        return data
 
     # --- token ---
     def _login(self) -> str:
         try:
-            with httpx.Client(timeout=self._timeout, headers=_UA) as client:
-                resp = client.post(
-                    f"{self._api}/auth/login",
-                    json={"username": self._cfg.username, "password": self._cfg.password},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            resp = self._api_client.post(
+                f"{self._api}/auth/login",
+                json={"username": self._cfg.username, "password": self._cfg.password},
+            )
+            resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise XteinkUploadError(f"login request failed: {exc}") from exc
+        data = self._json_dict(resp, "login")
         token = data.get("access_token")
         if not token:
             raise XteinkUploadError(f"login response had no access_token: {data!r}")
@@ -51,7 +82,10 @@ class XteinkClient:
     def _access_token(self, *, force_refresh: bool = False) -> str:
         if not force_refresh:
             cached = self._state.kv_get(_TOKEN_KEY)
-            ts = float(self._state.kv_get(_TOKEN_TS_KEY) or 0.0)
+            try:
+                ts = float(self._state.kv_get(_TOKEN_TS_KEY) or 0.0)
+            except (TypeError, ValueError):
+                ts = 0.0  # unreadable -> treat as expired, relogin repairs it
             if cached and (time.time() - ts) <= _TOKEN_MAX_AGE:
                 return cached
         token = self._login()
@@ -81,22 +115,21 @@ class XteinkClient:
         self, token: str, filename: str, content_type: str, file_md5: str, file_size: int
     ) -> dict:
         try:
-            with httpx.Client(timeout=self._timeout, headers=_UA) as client:
-                resp = client.post(
-                    f"{self._api}/api/v1/upload/signature",
-                    headers={"Authorization": f"Bearer {token}"},
-                    json={
-                        "filename": filename,
-                        "content_type": content_type,
-                        "file_md5": file_md5,
-                        "file_size": file_size,
-                        "prefix": "uploads/book",
-                    },
-                )
+            resp = self._api_client.post(
+                f"{self._api}/api/v1/upload/signature",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "filename": filename,
+                    "content_type": content_type,
+                    "file_md5": file_md5,
+                    "file_size": file_size,
+                    "prefix": "uploads/book",
+                },
+            )
         except httpx.HTTPError as exc:
             raise XteinkUploadError(f"signature request failed: {exc}") from exc
         self._check_status(resp, "signature")
-        sig = resp.json()
+        sig = self._json_dict(resp, "signature")
         if sig.get("success") is False or any(
             k not in sig for k in ("host", "key", "policy", "signature", "access_key_id")
         ):
@@ -113,8 +146,7 @@ class XteinkClient:
             "file": ("file", data, content_type),
         }
         try:
-            with httpx.Client(timeout=self._timeout, headers=_UA) as client:
-                resp = client.post(sig["host"], files=files)
+            resp = self._oss_client.post(sig["host"], files=files)
         except httpx.HTTPError as exc:
             raise XteinkUploadError(f"OSS upload failed: {exc}") from exc
         if resp.status_code != 204:
@@ -127,22 +159,21 @@ class XteinkClient:
         file_size: int, content_type: str,
     ) -> str:
         try:
-            with httpx.Client(timeout=self._timeout, headers=_UA) as client:
-                resp = client.post(
-                    f"{self._api}/api/v1/upload/callback",
-                    headers={"Authorization": f"Bearer {token}"},
-                    json={
-                        "oss_key": sig["key"],
-                        "filename": filename,
-                        "file_size": file_size,
-                        "file_md5": file_md5,
-                        "content_type": content_type,
-                    },
-                )
+            resp = self._api_client.post(
+                f"{self._api}/api/v1/upload/callback",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "oss_key": sig["key"],
+                    "filename": filename,
+                    "file_size": file_size,
+                    "file_md5": file_md5,
+                    "content_type": content_type,
+                },
+            )
         except httpx.HTTPError as exc:
             raise XteinkUploadError(f"callback request failed: {exc}") from exc
         self._check_status(resp, "callback")
-        data = resp.json()
+        data = self._json_dict(resp, "callback")
         record_id = data.get("record_id")
         if not record_id:
             raise XteinkUploadError(f"callback response had no record_id: {data!r}")
@@ -155,7 +186,10 @@ class XteinkClient:
         if content_type is None:
             raise XteinkUploadError(f"unsupported file extension {ext!r} (no content type)")
 
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise XteinkUploadError(f"cannot read {path}: {exc}") from exc
         file_md5 = hashlib.md5(data).hexdigest()
         file_size = len(data)
 

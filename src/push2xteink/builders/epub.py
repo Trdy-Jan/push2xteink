@@ -18,7 +18,7 @@ _XHTML = (
 
 def _chapter_html(article: Article) -> str:
     meta_bits = [b for b in (
-        article.source_title or "",
+        escape(article.source_title or ""),
         f'<a href="{escape(article.link)}">原文</a>' if article.link else "",
         format_published(article.published_at),
     ) if b]
@@ -52,7 +52,9 @@ def build_epub(title: str, articles: list[Article], *, out_dir: Path) -> Path:
     book.add_item(epub.EpubNav())
     book.spine = ["nav", *chapters]
 
-    path = Path(out_dir) / safe_filename(title, "epub")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / safe_filename(title, "epub")
     epub.write_epub(str(path), book)
     if path.stat().st_size < _MIN_BYTES:
         raise BuildError(f"generated EPUB too small ({path.stat().st_size} bytes): {path}")

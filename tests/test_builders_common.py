@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from push2xteink.builders.common import (
-    chapter_body_html, format_published, safe_filename,
+    chapter_body_html, format_published, html_to_text, safe_filename,
 )
 from push2xteink.models import Article
 
@@ -53,3 +53,15 @@ def test_chapter_body_escapes_summary():
                 content_html="<p>b</p>", summary="a < b & c")
     out = chapter_body_html(a)
     assert "a &lt; b &amp; c" in out
+
+
+def test_html_to_text_unclosed_p_tags_split_lines():
+    out = html_to_text("<p>alpha<p>beta<p>gamma")
+    lines = out.splitlines()
+    assert "alpha" in lines and "beta" in lines and "gamma" in lines
+    assert out.index("alpha") < out.index("beta") < out.index("gamma")
+
+
+def test_html_to_text_collapses_blank_lines_and_unescapes():
+    out = html_to_text("<div>one</div><div></div><div></div><div>two &amp; three</div>")
+    assert out == "one\n\ntwo & three"

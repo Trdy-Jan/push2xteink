@@ -147,3 +147,35 @@ def test_proxy_only_applied_when_use_proxy_true():
 def test_build_messages_default_truncation_is_12000():
     msgs = build_messages("SYS", "x" * 20000)
     assert len(msgs[1]["content"]) == 12000
+
+
+@respx.mock
+def test_summarizer_reuses_one_client_across_calls():
+    respx.post("https://api.primary/v1/chat/completions").mock(return_value=_chat_ok("x"))
+    s = Summarizer(_cfg())
+    first = s._client
+    s.summarize("a")
+    s.summarize("b")
+    assert s._client is first
+    s.close()
+
+
+@respx.mock
+def test_summarizer_follows_redirect():
+    respx.post("https://api.primary/v1/chat/completions").mock(
+        return_value=httpx.Response(307, headers={"Location": "https://api.primary/v2/chat/completions"})
+    )
+    respx.post("https://api.primary/v2/chat/completions").mock(return_value=_chat_ok("redir"))
+    assert Summarizer(_cfg()).summarize("body") == "redir"
+
+
+@respx.mock
+def test_summarizer_used_as_context_manager():
+    respx.post("https://api.primary/v1/chat/completions").mock(return_value=_chat_ok("cm"))
+    with Summarizer(_cfg()) as s:
+        assert s.summarize("body") == "cm"
+
+
+def test_summarizer_bad_proxy_url_raises_summarize_error():
+    with pytest.raises(SummarizeError):
+        Summarizer(_cfg(use_proxy=True), proxy_url="garbage")

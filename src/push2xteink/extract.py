@@ -5,9 +5,8 @@ from html import escape
 import httpx
 import trafilatura
 
+from .http import make_client
 from .models import Article
-
-_UA = {"User-Agent": "push2xteink/0.1 (+https://github.com/)"}
 
 
 def extract_full_text(
@@ -20,13 +19,11 @@ def extract_full_text(
     if not url:
         return None
     try:
-        with httpx.Client(
-            proxy=proxy_url, timeout=timeout, follow_redirects=True, headers=_UA
-        ) as client:
+        with make_client(proxy=proxy_url, timeout=timeout) as client:
             resp = client.get(url)
             resp.raise_for_status()
         html = resp.text
-    except (httpx.HTTPError, httpx.InvalidURL):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
 
     try:

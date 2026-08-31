@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from push2xteink.builders.txt import build_txt, _strip_html
+from push2xteink.builders.txt import build_txt
 from push2xteink.models import Article
 
 
@@ -30,11 +30,19 @@ def test_build_txt_no_summary_no_blank_summary_block(tmp_path):
     assert "标题0" in text and "第一段0" in text
 
 
-def test_strip_html_unclosed_p_tags_split_lines():
-    out = _strip_html("<p>alpha<p>beta<p>gamma")
-    lines = out.splitlines()
-    assert "alpha" in lines and "beta" in lines and "gamma" in lines
-    assert out.index("alpha") < out.index("beta") < out.index("gamma")
+def test_build_txt_source_title_not_escaped(tmp_path):
+    # .txt is a plain-text file: source_title must appear verbatim, not HTML-escaped
+    a = Article(feed_id="f", guid="g", title="标题", link="https://x/0",
+                source_title="A & B", content_html="<p>正文</p>")
+    text = build_txt("t", [a], out_dir=tmp_path).read_text(encoding="utf-8")
+    assert "A & B" in text
+    assert "A &amp; B" not in text
+
+
+def test_build_txt_creates_missing_out_dir(tmp_path):
+    nested = tmp_path / "x" / "y"
+    path = build_txt("t", [_a(0)], out_dir=nested)
+    assert path.exists() and path.parent == nested
 
 
 def test_build_txt_meta_line_skips_empty_parts(tmp_path):

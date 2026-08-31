@@ -57,6 +57,30 @@ def test_build_epub_raises_when_too_small(tmp_path, monkeypatch):
         build_epub("t", _articles(1), out_dir=tmp_path)
 
 
+def test_build_epub_escapes_source_title_in_meta(tmp_path):
+    art = Article(
+        feed_id="f", guid="g0", title="文章", link="https://x/0",
+        source_title="Tom & Jerry <b>x",
+        published_at=datetime(2026, 8, 31, 7, 0, tzinfo=timezone.utc),
+        content_html="<p>正文 " + "内容很长。" * 20 + "</p>",
+    )
+    path = build_epub("t", [art], out_dir=tmp_path)
+    book = epub.read_epub(str(path))
+    doc = next(
+        i for i in book.get_items()
+        if isinstance(i, epub.EpubHtml) and i.file_name.startswith("ch")
+    ).get_content().decode("utf-8")
+    assert "Tom &amp; Jerry &lt;b&gt;x" in doc
+    assert '<a href="https://x/0">原文</a>' in doc
+    assert doc.index("Tom &amp; Jerry") < doc.index("原文</a>")
+
+
+def test_build_epub_creates_missing_out_dir(tmp_path):
+    nested = tmp_path / "a" / "b"
+    path = build_epub("t", _articles(1), out_dir=nested)
+    assert path.exists() and path.parent == nested
+
+
 def test_build_epub_overwrites_existing(tmp_path):
     p1 = build_epub("dup", _articles(1), out_dir=tmp_path)
     p2 = build_epub("dup", _articles(2), out_dir=tmp_path)

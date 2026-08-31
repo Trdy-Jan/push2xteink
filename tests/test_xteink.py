@@ -227,6 +227,81 @@ def test_push_file_signature_200_but_unsuccessful_raises(tmp_path):
 
 
 @respx.mock
+def test_login_non_json_body_raises_upload_error(tmp_path):
+    respx.post(f"{API}/auth/login").mock(return_value=httpx.Response(200, text="<html>err</html>"))
+    with pytest.raises(XteinkUploadError):
+        _client(tmp_path)._access_token()
+
+
+@respx.mock
+def test_login_non_object_json_raises_upload_error(tmp_path):
+    respx.post(f"{API}/auth/login").mock(return_value=httpx.Response(200, json=["not", "a", "dict"]))
+    with pytest.raises(XteinkUploadError):
+        _client(tmp_path)._access_token()
+
+
+@respx.mock
+def test_signature_non_json_body_raises_upload_error(tmp_path):
+    respx.post(f"{API}/api/v1/upload/signature").mock(
+        return_value=httpx.Response(200, text="<html>err</html>")
+    )
+    with pytest.raises(XteinkUploadError):
+        _client(tmp_path)._request_signature("t", "f.epub", "application/epub+zip", "m", 1)
+
+
+@respx.mock
+def test_signature_non_object_json_raises_upload_error(tmp_path):
+    respx.post(f"{API}/api/v1/upload/signature").mock(
+        return_value=httpx.Response(200, json=["not", "a", "dict"])
+    )
+    with pytest.raises(XteinkUploadError):
+        _client(tmp_path)._request_signature("t", "f.epub", "application/epub+zip", "m", 1)
+
+
+@respx.mock
+def test_callback_non_json_body_raises_upload_error(tmp_path):
+    respx.post(f"{API}/api/v1/upload/callback").mock(
+        return_value=httpx.Response(200, text="<html>err</html>")
+    )
+    with pytest.raises(XteinkUploadError):
+        _client(tmp_path)._callback("t", SIG_RESP, "f.epub", "m", 1, "application/epub+zip")
+
+
+@respx.mock
+def test_callback_non_object_json_raises_upload_error(tmp_path):
+    respx.post(f"{API}/api/v1/upload/callback").mock(
+        return_value=httpx.Response(200, json=["not", "a", "dict"])
+    )
+    with pytest.raises(XteinkUploadError):
+        _client(tmp_path)._callback("t", SIG_RESP, "f.epub", "m", 1, "application/epub+zip")
+
+
+@respx.mock
+def test_push_file_unreadable_file_raises_upload_error(tmp_path):
+    with pytest.raises(XteinkUploadError):
+        _client(tmp_path).push_file(tmp_path / "missing.epub", "missing.epub")
+
+
+@respx.mock
+def test_corrupt_token_timestamp_self_heals(tmp_path):
+    route = respx.post(f"{API}/auth/login").mock(
+        return_value=httpx.Response(200, json={"access_token": "healed"})
+    )
+    c = _client(tmp_path)
+    c._state.kv_set("xteink_access_token", "stale")
+    c._state.kv_set("xteink_token_obtained_at", "garbage")
+    assert c._access_token() == "healed"
+    assert route.called
+
+
+@respx.mock
+def test_client_used_as_context_manager(tmp_path):
+    respx.post(f"{API}/auth/login").mock(return_value=httpx.Response(200, json={"access_token": "tok"}))
+    with XteinkClient(XteinkConfig(username="u", password="p"), State(tmp_path / "s.db")) as c:
+        assert c._access_token() == "tok"
+
+
+@respx.mock
 def test_push_file_401_twice_raises(tmp_path):
     f = tmp_path / "a.txt"
     f.write_bytes(b"data")

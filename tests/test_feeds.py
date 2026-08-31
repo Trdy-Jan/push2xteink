@@ -78,6 +78,13 @@ def test_fetch_malformed_url_returns_error_result():
     assert result.error is not None
 
 
+def test_fetch_bad_proxy_url_returns_error_result():
+    result = fetch_feed(Feed(id="x", url="https://ok.example/rss"), proxy_url="127.0.0.1:7890")
+    assert isinstance(result, FeedResult)
+    assert result.articles == []
+    assert result.error is not None
+
+
 NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
 
 
