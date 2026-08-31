@@ -77,5 +77,26 @@ def fetch_feed(
     return FeedResult(articles=articles)
 
 
-def select_new_articles(*args, **kwargs):  # Task 2
-    raise NotImplementedError
+def select_new_articles(
+    state: State,
+    feed_id: str,
+    articles: list[Article],
+    *,
+    first_run: bool,
+    lookback_hours: int,
+    now: datetime | None = None,
+) -> list[Article]:
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    cutoff = now - timedelta(hours=lookback_hours)
+
+    kept: list[Article] = []
+    for art in articles:
+        if not state.is_item_pushable(feed_id, art.guid, lookback_hours, now=now):
+            continue
+        if first_run and (art.published_at is None or art.published_at < cutoff):
+            continue
+        state.record_seen(feed_id, art.guid, now=now)
+        kept.append(art)
+    return kept
