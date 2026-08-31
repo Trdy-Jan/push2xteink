@@ -3,7 +3,8 @@ from pathlib import Path
 import httpx
 import respx
 
-from push2xteink.extract import extract_full_text
+from push2xteink.extract import apply_full_text, extract_full_text
+from push2xteink.models import Article
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -45,3 +46,32 @@ def test_escapes_html_in_extracted_text():
     assert out is not None
     assert "<script" not in out
     assert "&lt;" in out or "&amp;" in out  # raw < / & were escaped
+
+
+def _art():
+    return Article(feed_id="f", guid="g", title="t", link="https://site.example/post",
+                   content_html="<p>rss summary</p>", content_is_full_text=False)
+
+
+def test_disabled_returns_original():
+    a = _art()
+    out = apply_full_text(a, enabled=False)
+    assert out is a or out == a
+    assert out.content_is_full_text is False
+    assert out.content_html == "<p>rss summary</p>"
+
+
+@respx.mock
+def test_enabled_success_replaces_content(monkeypatch):
+    monkeypatch.setattr("push2xteink.extract.extract_full_text", lambda *a, **k: "<p>full body text</p>")
+    out = apply_full_text(_art(), enabled=True)
+    assert out.content_is_full_text is True
+    assert out.content_html == "<p>full body text</p>"
+    assert out.guid == "g"  # other fields preserved
+
+
+def test_enabled_failure_falls_back(monkeypatch):
+    monkeypatch.setattr("push2xteink.extract.extract_full_text", lambda *a, **k: None)
+    out = apply_full_text(_art(), enabled=True)
+    assert out.content_is_full_text is False
+    assert out.content_html == "<p>rss summary</p>"

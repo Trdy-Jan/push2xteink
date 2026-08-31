@@ -38,5 +38,18 @@ def extract_full_text(
     return "".join(f"<p>{p}</p>" for p in paras)
 
 
-def apply_full_text(*args, **kwargs):  # Task 4
-    raise NotImplementedError
+def apply_full_text(
+    article: Article,
+    *,
+    enabled: bool,
+    proxy_url: str | None = None,
+    timeout: float = 20.0,
+) -> Article:
+    if not enabled:
+        return article
+    extracted = extract_full_text(article.link, proxy_url=proxy_url, timeout=timeout)
+    if extracted is None:
+        return article
+    return article.model_copy(
+        update={"content_html": extracted, "content_is_full_text": True}
+    )
