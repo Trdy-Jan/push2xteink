@@ -196,6 +196,48 @@ def test_serve_unopenable_db_returns_2(tmp_path, capsys, monkeypatch, _fake_sche
     assert "database error" in capsys.readouterr().err
 
 
+def test_serve_scheduler_init_failure_returns_2(tmp_path, capsys, monkeypatch):
+    class BoomSched:
+        def __init__(self, config, state, **kw):
+            raise RuntimeError("bad proxy")
+
+    monkeypatch.setattr("push2xteink.cli.Scheduler", BoomSched)
+    closed = {"n": 0}
+    real_state = __import__("push2xteink.state", fromlist=["State"]).State
+
+    def _tracking_state(*a, **k):
+        st = real_state(*a, **k)
+        orig_close = st.close
+
+        def close():
+            closed["n"] += 1
+            orig_close()
+
+        st.close = close
+        return st
+
+    monkeypatch.setattr("push2xteink.cli.State", _tracking_state)
+    stop = threading.Event()
+    stop.set()
+    rc = main(
+        ["--config", str(_cfg_file(tmp_path)), "--db", str(tmp_path / "s.db"), "serve"],
+        _serve_stop=stop,
+    )
+    assert rc == 2
+    assert "scheduler init failed" in capsys.readouterr().err
+    assert closed["n"] == 1  # state connection not leaked
+
+
+def test_bare_main_defaults_to_serve_via_env(tmp_path, capsys, monkeypatch, _fake_sched):
+    monkeypatch.setenv("CONFIG_PATH", str(_cfg_file(tmp_path)))
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "s.db"))
+    stop = threading.Event()
+    stop.set()
+    rc = main([], _serve_stop=stop)
+    assert rc == 0
+    assert _fake_sched.instances[0].started and _fake_sched.instances[0].shut
+
+
 def test_serve_hot_reloads_on_config_change(tmp_path, capsys, monkeypatch, _fake_sched):
     cfg = _cfg_file(tmp_path)
 

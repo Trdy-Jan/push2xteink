@@ -53,8 +53,13 @@ def _serve(
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: stop.set())
 
-    sched = (_scheduler_cls or Scheduler)(config, state)
-    sched.start()
+    try:
+        sched = (_scheduler_cls or Scheduler)(config, state)
+        sched.start()
+    except Exception as exc:  # noqa: BLE001 - bad proxy.url etc. -> friendly exit 2
+        print(f"scheduler init failed: {exc}", file=sys.stderr)
+        state.close()
+        return 2
     ids = sched.enabled_task_ids
     print(f"scheduler started: {len(ids)} task(s): {', '.join(ids)}")
 
@@ -78,8 +83,10 @@ def _serve(
             except ConfigError as exc:
                 print(f"reload skipped (invalid config): {exc}", file=sys.stderr)
     finally:
-        sched.shutdown()
-        state.close()
+        try:
+            sched.shutdown()
+        finally:
+            state.close()
     return 0
 
 
