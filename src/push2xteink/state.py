@@ -107,3 +107,41 @@ class State:
             [(ts, feed_id, g) for g in guids],
         )
         self._conn.commit()
+
+    # --- runs ---
+    def start_run(self, task_id: str, *, now: datetime | None = None) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO runs(task_id, started_at, status) VALUES(?, ?, 'running')",
+            (task_id, _iso(now or _utcnow())),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def finish_run(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        item_count: int | None = None,
+        file_name: str | None = None,
+        message: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        self._conn.execute(
+            "UPDATE runs SET finished_at = ?, status = ?, item_count = ?, "
+            "file_name = ?, message = ? WHERE id = ?",
+            (_iso(now or _utcnow()), status, item_count, file_name, message, run_id),
+        )
+        self._conn.commit()
+
+    def task_has_successful_run(self, task_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM runs WHERE task_id = ? AND status = 'success' LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        return row is not None
+
+    def recent_runs(self, limit: int = 50) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()

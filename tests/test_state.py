@@ -72,3 +72,40 @@ def test_mark_pushed_only_affects_listed_guids(tmp_path):
     assert s.is_item_pushable("hn", "g1", 48, now=NOW) is False
     assert s.is_item_pushable("hn", "g2", 48, now=NOW) is True
     s.close()
+
+
+def test_run_lifecycle(tmp_path):
+    s = State(tmp_path / "s.db")
+    rid = s.start_run("brief", now=NOW)
+    assert isinstance(rid, int)
+    assert s.task_has_successful_run("brief") is False
+
+    s.finish_run(
+        rid, status="success", item_count=3, file_name="早报_20260831.epub",
+        now=NOW + timedelta(minutes=2),
+    )
+    assert s.task_has_successful_run("brief") is True
+
+    row = s.recent_runs(10)[0]
+    assert row["status"] == "success"
+    assert row["item_count"] == 3
+    assert row["file_name"] == "早报_20260831.epub"
+    assert row["finished_at"] == (NOW + timedelta(minutes=2)).isoformat()
+    s.close()
+
+
+def test_failed_run_does_not_count_as_success(tmp_path):
+    s = State(tmp_path / "s.db")
+    rid = s.start_run("brief", now=NOW)
+    s.finish_run(rid, status="failed", message="upload 500", now=NOW)
+    assert s.task_has_successful_run("brief") is False
+    s.close()
+
+
+def test_recent_runs_ordered_desc(tmp_path):
+    s = State(tmp_path / "s.db")
+    r1 = s.start_run("a", now=NOW)
+    r2 = s.start_run("b", now=NOW + timedelta(minutes=1))
+    ids = [row["id"] for row in s.recent_runs(10)]
+    assert ids == [r2, r1]
+    s.close()
