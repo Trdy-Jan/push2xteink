@@ -127,3 +127,46 @@ def test_shutdown_drains_run_now_in_flight(tmp_path):
     assert s.active_count == 0 and fp.closed is True
     t.join(timeout=5)
     st.close()
+
+
+def test_reload_swaps_config_and_jobs(tmp_path):
+    st = State(tmp_path / "s.db")
+    pipelines = []
+    def factory(c, s):
+        fp = FakePipeline(); fp.cfg = c; pipelines.append(fp); return fp
+    s = Scheduler(_config(), st, pipeline_factory=factory)
+    s.start()
+    try:
+        new = _config(tasks=[
+            Task(id="t1", name="T1", feeds=["a"], schedule="0 7 * * *", enabled=False),
+            Task(id="t3", name="T3", feeds=["a"], schedule="0 9 * * *", enabled=True),
+        ])
+        s.reload(new)
+        assert s.enabled_task_ids == ["t3"]
+        assert {j.id for j in s._aps.get_jobs()} == {"t3"}
+        assert pipelines[0].closed is True      # old pipeline closed
+        assert pipelines[1].closed is False     # new one live
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_reload_waits_for_in_flight_run_before_closing_old_pipeline(tmp_path):
+    import time
+    st = State(tmp_path / "s.db")
+    made = []
+    def factory(c, s):
+        fp = FakePipeline(); made.append(fp); return fp
+    s = Scheduler(_config(), st, pipeline_factory=factory)
+    s.start()
+    old = made[0]; old.block = threading.Event()
+    t = threading.Thread(target=s.run_now, args=("t1",)); t.start()
+    for _ in range(200):
+        if old.calls: break
+        time.sleep(0.01)
+    threading.Timer(0.3, old.block.set).start()
+    s.reload(_config())               # must block on drain before closing `old`
+    assert old.closed is True         # closed only after the run finished
+    t.join(timeout=5)
+    s.shutdown()
+    st.close()

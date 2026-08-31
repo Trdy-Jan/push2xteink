@@ -107,6 +107,24 @@ class Scheduler:
             self._aps.shutdown(wait=wait)
         self._drain(self._drain_timeout)
         self._pipeline.close()
+        for orphan in self._orphans:
+            orphan.close()
+        self._orphans.clear()
 
-    def reload(self, new_config: Config) -> None:  # Task 3
-        raise NotImplementedError
+    def reload(self, new_config: Config) -> None:
+        self._aps.pause()
+        drained = self._drain(self._drain_timeout)
+
+        old_pipeline = self._pipeline
+        self._pipeline = self._pipeline_factory(new_config, self._state)
+        self._config = new_config
+        self._register_jobs()
+        self._aps.resume()
+
+        if drained:
+            old_pipeline.close()
+        else:
+            logger.warning(
+                "reload could not drain; deferring old pipeline close to shutdown"
+            )
+            self._orphans.append(old_pipeline)
