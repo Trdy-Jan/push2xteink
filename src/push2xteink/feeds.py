@@ -7,10 +7,9 @@ from datetime import datetime, timedelta, timezone
 import feedparser
 import httpx
 
+from .http import make_client
 from .models import Article, Feed
 from .state import State
-
-_UA = {"User-Agent": "push2xteink/0.1 (+https://github.com/)"}
 
 
 @dataclasses.dataclass
@@ -40,13 +39,11 @@ def fetch_feed(
     feed: Feed, *, proxy_url: str | None = None, timeout: float = 20.0
 ) -> FeedResult:
     try:
-        with httpx.Client(
-            proxy=proxy_url, timeout=timeout, follow_redirects=True, headers=_UA
-        ) as client:
+        with make_client(proxy=proxy_url, timeout=timeout) as client:
             resp = client.get(feed.url)
             resp.raise_for_status()
         raw = resp.content
-    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         return FeedResult(error=f"fetch failed: {exc!s}")
 
     parsed = feedparser.parse(raw)

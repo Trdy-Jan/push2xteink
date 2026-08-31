@@ -38,6 +38,10 @@ def test_empty_url_returns_none():
     assert extract_full_text("") is None
 
 
+def test_bad_proxy_url_returns_none():
+    assert extract_full_text("https://site.example/post", proxy_url="127.0.0.1:7890") is None
+
+
 @respx.mock
 def test_trafilatura_raising_returns_none(monkeypatch):
     respx.get("https://site.example/boom").mock(
