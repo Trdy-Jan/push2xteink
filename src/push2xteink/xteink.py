@@ -54,3 +54,70 @@ class XteinkClient:
         self._state.kv_set(_TOKEN_KEY, token)
         self._state.kv_set(_TOKEN_TS_KEY, str(time.time()))
         return token
+
+    # --- upload steps ---
+    def _request_signature(
+        self, token: str, filename: str, content_type: str, file_md5: str, file_size: int
+    ) -> dict:
+        try:
+            with httpx.Client(timeout=self._timeout, headers=_UA) as client:
+                resp = client.post(
+                    f"{self._api}/api/v1/upload/signature",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "filename": filename,
+                        "content_type": content_type,
+                        "file_md5": file_md5,
+                        "file_size": file_size,
+                        "prefix": "uploads/book",
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPError as exc:
+            raise XteinkUploadError(f"signature request failed: {exc}") from exc
+
+    def _upload_to_oss(self, sig: dict, content_type: str, data: bytes) -> None:
+        files = {
+            "key": (None, sig["key"]),
+            "policy": (None, sig["policy"]),
+            "OSSAccessKeyId": (None, sig["access_key_id"]),
+            "signature": (None, sig["signature"]),
+            "Content-Type": (None, content_type),
+            "file": ("file", data, content_type),
+        }
+        try:
+            with httpx.Client(timeout=self._timeout, headers=_UA) as client:
+                resp = client.post(sig["host"], files=files)
+        except httpx.HTTPError as exc:
+            raise XteinkUploadError(f"OSS upload failed: {exc}") from exc
+        if resp.status_code != 204:
+            raise XteinkUploadError(
+                f"OSS upload returned {resp.status_code}: {resp.text[:200]}"
+            )
+
+    def _callback(
+        self, token: str, sig: dict, filename: str, file_md5: str,
+        file_size: int, content_type: str,
+    ) -> str:
+        try:
+            with httpx.Client(timeout=self._timeout, headers=_UA) as client:
+                resp = client.post(
+                    f"{self._api}/api/v1/upload/callback",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "oss_key": sig["key"],
+                        "filename": filename,
+                        "file_size": file_size,
+                        "file_md5": file_md5,
+                        "content_type": content_type,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPError as exc:
+            raise XteinkUploadError(f"callback request failed: {exc}") from exc
+        record_id = data.get("record_id")
+        if not record_id:
+            raise XteinkUploadError(f"callback response had no record_id: {data!r}")
+        return record_id

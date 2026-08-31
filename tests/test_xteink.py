@@ -67,3 +67,76 @@ def test_login_missing_token_raises(tmp_path):
     respx.post(f"{API}/auth/login").mock(return_value=httpx.Response(200, json={"message": None}))
     with pytest.raises(XteinkUploadError):
         _client(tmp_path)._access_token()
+
+
+SIG_RESP = {
+    "success": True, "instant_upload": False,
+    "host": "https://oss.example.com",
+    "key": "uploads/book/2026/x.epub",
+    "policy": "POLICY", "signature": "SIG", "access_key_id": "AK",
+}
+
+
+@respx.mock
+def test_request_signature_sends_expected_body(tmp_path):
+    route = respx.post(f"{API}/api/v1/upload/signature").mock(
+        return_value=httpx.Response(200, json=SIG_RESP)
+    )
+    c = _client(tmp_path)
+    sig = c._request_signature("tok", "早报.epub", "application/epub+zip", "md5hex", 12345)
+    assert sig["key"] == "uploads/book/2026/x.epub"
+    req = route.calls.last.request
+    assert req.headers["authorization"] == "Bearer tok"
+    body = json.loads(req.content)
+    assert body == {
+        "filename": "早报.epub", "content_type": "application/epub+zip",
+        "file_md5": "md5hex", "file_size": 12345, "prefix": "uploads/book",
+    }
+
+
+@respx.mock
+def test_signature_non_200_raises(tmp_path):
+    respx.post(f"{API}/api/v1/upload/signature").mock(return_value=httpx.Response(500))
+    with pytest.raises(XteinkUploadError, match="signature"):
+        _client(tmp_path)._request_signature("t", "f.epub", "application/epub+zip", "m", 1)
+
+
+@respx.mock
+def test_upload_to_oss_posts_multipart(tmp_path):
+    route = respx.post("https://oss.example.com").mock(return_value=httpx.Response(204))
+    _client(tmp_path)._upload_to_oss(SIG_RESP, "application/epub+zip", b"EPUBDATA")
+    req = route.calls.last.request
+    assert "authorization" not in {k.lower() for k in req.headers}
+    assert b'name="key"' in req.content and b"uploads/book/2026/x.epub" in req.content
+    assert b'name="OSSAccessKeyId"' in req.content and b"AK" in req.content
+    assert b"EPUBDATA" in req.content
+
+
+@respx.mock
+def test_upload_to_oss_non_204_raises(tmp_path):
+    respx.post("https://oss.example.com").mock(return_value=httpx.Response(403, text="denied"))
+    with pytest.raises(XteinkUploadError, match="OSS"):
+        _client(tmp_path)._upload_to_oss(SIG_RESP, "text/plain", b"x")
+
+
+@respx.mock
+def test_callback_returns_record_id(tmp_path):
+    route = respx.post(f"{API}/api/v1/upload/callback").mock(
+        return_value=httpx.Response(200, json={"success": True, "record_id": "rec-1"})
+    )
+    rid = _client(tmp_path)._callback("tok", SIG_RESP, "早报.epub", "md5", 99, "application/epub+zip")
+    assert rid == "rec-1"
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "oss_key": "uploads/book/2026/x.epub", "filename": "早报.epub",
+        "file_size": 99, "file_md5": "md5", "content_type": "application/epub+zip",
+    }
+
+
+@respx.mock
+def test_callback_without_record_id_raises(tmp_path):
+    respx.post(f"{API}/api/v1/upload/callback").mock(
+        return_value=httpx.Response(200, json={"success": True})
+    )
+    with pytest.raises(XteinkUploadError, match="callback"):
+        _client(tmp_path)._callback("t", SIG_RESP, "f.epub", "m", 1, "application/epub+zip")
