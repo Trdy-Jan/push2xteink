@@ -123,3 +123,56 @@ def test_gather_dedups_across_runs(pipeline_config, tmp_path, monkeypatch):
     second, _ = p._gather(task, now=NOW, warnings=[])
     assert second == []
     s.close()
+
+
+# --- Task 3: _prepare ------------------------------------------------------
+
+
+def test_prepare_applies_full_text_concurrently_preserving_order(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    seen = []
+    def fake_aft(article, *, enabled, **kw):
+        seen.append((article.guid, enabled))
+        return article.model_copy(update={"content_html": f"<p>full {article.guid}</p>",
+                                          "content_is_full_text": enabled})
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text", fake_aft)
+    arts = [_art("a", "a1"), _art("a", "a2"), _art("b", "b1")]
+    out = _pipe(pipeline_config, s)._prepare(pipeline_config.tasks[0], arts, warnings=[])
+    assert [a.guid for a in out] == ["a1", "a2", "b1"]           # order preserved
+    assert out[0].content_html == "<p>full a1</p>"
+    assert dict(seen)["a1"] is True and dict(seen)["b1"] is False  # feed.full_text honored
+    s.close()
+
+
+def test_prepare_summarizes_when_task_wants_it(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text", lambda a, **kw: a)
+    fs = FakeSummarizer()
+    p = Pipeline(pipeline_config, s, summarizer=fs, xteink_client=FakeXteink())
+    out = p._prepare(pipeline_config.tasks[0], [_art("a", "a1")], warnings=[])   # tasks[0].summarize=True
+    assert out[0].summary and out[0].summary.startswith("summary of")
+    s.close()
+
+
+def test_prepare_no_summary_when_task_opts_out(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text", lambda a, **kw: a)
+    p = Pipeline(pipeline_config, s, summarizer=FakeSummarizer(), xteink_client=FakeXteink())
+    out = p._prepare(pipeline_config.tasks[1], [_art("a", "a1")], warnings=[])   # tasks[1].summarize=False
+    assert out[0].summary is None
+    s.close()
+
+
+def test_prepare_summary_failure_is_warned_and_skipped(pipeline_config, tmp_path, monkeypatch):
+    from push2xteink.summarize import SummarizeError
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text", lambda a, **kw: a)
+    class BadSummarizer:
+        def summarize(self, text): raise SummarizeError("nope")
+        def close(self): pass
+    p = Pipeline(pipeline_config, s, summarizer=BadSummarizer(), xteink_client=FakeXteink())
+    warnings = []
+    out = p._prepare(pipeline_config.tasks[0], [_art("a", "a1"), _art("a", "a2")], warnings=warnings)
+    assert all(a.summary is None for a in out)
+    assert len(warnings) == 2 and all("summary failed" in w for w in warnings)
+    s.close()

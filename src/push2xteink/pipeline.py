@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import dataclasses
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .builders import html_to_text
+from .extract import apply_full_text
 from .feeds import fetch_feed, select_new_articles
 from .models import Article, Config, Feed, Task
 from .state import State
-from .summarize import Summarizer
+from .summarize import SummarizeError, Summarizer
 from .xteink import XteinkClient
 
 
@@ -111,6 +114,33 @@ class Pipeline:
                 kept.extend(new)
                 kept_guids[feed_id] = [a.guid for a in new]
         return kept, kept_guids
+
+    # --- step 3-4: full-text + summary ---
+    def _prepare(
+        self, task: Task, articles: list[Article], *, warnings: list[str]
+    ) -> list[Article]:
+        def do_extract(article: Article) -> Article:
+            feed = self._feed(article.feed_id)
+            return apply_full_text(
+                article,
+                enabled=feed.full_text,
+                proxy_url=self._proxy_for(feed),
+                timeout=self._config.fetch.timeout_seconds,
+            )
+
+        workers = max(1, self._config.fetch.concurrency)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            articles = list(pool.map(do_extract, articles))
+
+        if task.summarize and self._summarizer is not None:
+            for article in articles:
+                try:
+                    article.summary = self._summarizer.summarize(
+                        html_to_text(article.content_html)
+                    )
+                except SummarizeError as exc:
+                    warnings.append(f"summary failed for {article.link}: {exc}")
+        return articles
 
     def run_task(self, task_id: str, *, now=None) -> RunOutcome:  # Task 5
         raise NotImplementedError
