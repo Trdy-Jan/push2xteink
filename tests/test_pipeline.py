@@ -58,3 +58,68 @@ def test_from_config_no_summarizer_when_ai_absent(pipeline_config, tmp_path):
     assert p._summarizer is None
     p.close()
     s.close()
+
+
+# --- Task 2: _gather ---------------------------------------------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+from push2xteink.feeds import FeedResult  # noqa: E402
+from push2xteink.models import Article  # noqa: E402
+
+NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+
+
+def _art(feed_id, guid):
+    # published_at pinned to NOW so first-run lookback filtering keeps these
+    # test fixtures (P2 select_new_articles drops undated items on first run).
+    return Article(feed_id=feed_id, guid=guid, title="t", link=f"https://x/{guid}",
+                   content_html="<p>c</p>", published_at=NOW)
+
+
+def _pipe(cfg, state):
+    return Pipeline(cfg, state, summarizer=FakeSummarizer(), xteink_client=FakeXteink())
+
+
+def test_gather_collects_new_from_all_feeds(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    def fake_fetch(feed, **kw):
+        return FeedResult(articles=[_art(feed.id, f"{feed.id}1"), _art(feed.id, f"{feed.id}2")])
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", fake_fetch)
+
+    task = pipeline_config.tasks[0]
+    warnings = []
+    arts, guids = _pipe(pipeline_config, s)._gather(task, now=NOW, warnings=warnings)
+    assert {a.guid for a in arts} == {"a1", "a2", "b1", "b2"}
+    assert guids == {"a": ["a1", "a2"], "b": ["b1", "b2"]}
+    assert warnings == []
+    s.close()
+
+
+def test_gather_feed_error_is_warned_not_raised(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    def fake_fetch(feed, **kw):
+        if feed.id == "a":
+            return FeedResult(error="boom")
+        return FeedResult(articles=[_art("b", "b1")])
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", fake_fetch)
+    warnings = []
+    arts, guids = _pipe(pipeline_config, s)._gather(pipeline_config.tasks[0], now=NOW, warnings=warnings)
+    assert [a.guid for a in arts] == ["b1"]
+    assert any("a" in w and "boom" in w for w in warnings)
+    s.close()
+
+
+def test_gather_dedups_across_runs(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed",
+                        lambda feed, **kw: FeedResult(articles=[_art(feed.id, f"{feed.id}1")]))
+    p = _pipe(pipeline_config, s)
+    task = pipeline_config.tasks[0]
+    first, _ = p._gather(task, now=NOW, warnings=[])
+    assert len(first) == 2
+    # mark them pushed so they're not pushable again
+    s.mark_pushed("a", ["a1"], now=NOW); s.mark_pushed("b", ["b1"], now=NOW)
+    second, _ = p._gather(task, now=NOW, warnings=[])
+    assert second == []
+    s.close()
