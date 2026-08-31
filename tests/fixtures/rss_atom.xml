@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Blog</title>
+  <link href="https://blog.example/"/>
+  <updated>2026-08-30T10:00:00Z</updated>
+  <id>https://blog.example/</id>
+  <entry>
+    <id>https://blog.example/posts/1</id>
+    <title>First Post</title>
+    <link href="https://blog.example/posts/1"/>
+    <updated>2026-08-30T10:00:00Z</updated>
+    <author><name>Alice</name></author>
+    <content type="html">&lt;p&gt;Full body one&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <id>https://blog.example/posts/2</id>
+    <title>Second Post</title>
+    <link href="https://blog.example/posts/2"/>
+    <updated>2026-08-29T09:00:00Z</updated>
+    <author><name>Alice</name></author>
+    <content type="html">&lt;p&gt;Full body two&lt;/p&gt;</content>
+  </entry>
+</feed>

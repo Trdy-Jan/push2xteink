@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>RSS Two</title>
+    <link>https://x.example/</link>
+    <description>An RSS 2.0 feed</description>
+    <item>
+      <title>Item One</title>
+      <link>https://x.example/1</link>
+      <guid>https://x.example/1</guid>
+      <pubDate>Fri, 29 Aug 2026 08:00:00 GMT</pubDate>
+      <description>&lt;p&gt;Summary text&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>Item Two</title>
+      <link>https://x.example/2</link>
+      <guid>https://x.example/2</guid>
+      <pubDate>Thu, 28 Aug 2026 08:00:00 GMT</pubDate>
+      <description>&lt;p&gt;Another summary&lt;/p&gt;</description>
+    </item>
+  </channel>
+</rss>
