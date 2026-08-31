@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime
 from typing import Callable
 
 from apscheduler.executors.pool import ThreadPoolExecutor as APSThreadPoolExecutor
@@ -42,6 +43,9 @@ class Scheduler:
         self._drain_timeout = drain_timeout
         self._active_ids: list[str] = []
         self._cond = threading.Condition()
+        # Serializes reload()/shutdown() against each other: in P5 the mtime
+        # watcher and a FastAPI request thread can both call reload().
+        self._reload_lock = threading.RLock()
         self._shutdown = False
         self._orphans: list[Pipeline] = []
 
@@ -49,8 +53,12 @@ class Scheduler:
     def _run(self, task_id: str) -> RunOutcome | None:
         with self._cond:
             self._active_ids.append(task_id)
+            # Capture the pipeline reference atomically with registration so a
+            # concurrent reload() either waits for this run in its drain (we
+            # registered first) or swaps in a new pipeline that we never see.
+            pipeline = self._pipeline
         try:
-            return self._pipeline.run_task(task_id)
+            return pipeline.run_task(task_id)
         except Exception:  # noqa: BLE001 - run_task shouldn't raise; never leak
             logger.exception("run_task(%s) raised unexpectedly", task_id)
             return None
@@ -60,6 +68,20 @@ class Scheduler:
                 self._cond.notify_all()
 
     def run_now(self, task_id: str) -> RunOutcome:
+        with self._cond:
+            if self._shutdown:
+                return RunOutcome(
+                    task_id, "failed", 0, None, None, "scheduler is shut down"
+                )
+            if task_id in self._active_ids:
+                # Honours the spec §9 non-concurrency invariant that APScheduler's
+                # max_instances=1 gives cron fires. Not perfectly atomic with
+                # _run's own append, but the window is a few bytecodes under the
+                # GIL and a cron fire landing in it at 1-min granularity is
+                # astronomically unlikely.
+                return RunOutcome(
+                    task_id, "skipped", 0, None, None, "task already running"
+                )
         outcome = self._run(task_id)
         if outcome is None:
             return RunOutcome(task_id, "failed", 0, None, None, "scheduler internal error")
@@ -88,11 +110,22 @@ class Scheduler:
         with self._cond:
             return len(self._active_ids)
 
+    @property
+    def config(self) -> Config:
+        """The live config (reflects the most recent successful reload)."""
+        return self._config
+
+    def next_run_time(self, task_id: str) -> datetime | None:
+        job = self._aps.get_job(task_id)
+        return job.next_run_time if job else None
+
     def start(self) -> None:
         if self._shutdown or self._aps.running:
             return
         self._register_jobs()
         self._aps.start()
+        for job in self._aps.get_jobs():
+            logger.info("task %s scheduled, next run %s", job.id, job.next_run_time)
 
     @staticmethod
     def _safe_close(pipeline: Pipeline) -> None:
@@ -108,41 +141,65 @@ class Scheduler:
             logger.warning("drain timed out with %d active run(s)", self.active_count)
         return drained
 
-    def shutdown(self, *, wait: bool = True) -> None:
-        if self._shutdown:
-            return
-        self._shutdown = True
-        if self._aps.running:
-            self._aps.shutdown(wait=wait)
-        self._drain(self._drain_timeout)
-        # Close orphans first: a raise in the current pipeline's close() must not
-        # strand them (and _shutdown is already True, so a retry is a no-op).
-        for orphan in self._orphans:
-            self._safe_close(orphan)
-        self._orphans.clear()
-        self._safe_close(self._pipeline)
+    def shutdown(self) -> None:
+        with self._reload_lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            if self._aps.running:
+                # wait=False + one bounded _drain: drain_timeout covers cron jobs
+                # too, instead of aps.shutdown(wait=True) blocking unbounded on a
+                # wedged run.
+                self._aps.shutdown(wait=False)
+            self._drain(self._drain_timeout)
+            # Close orphans first: a raise in the current pipeline's close() must
+            # not strand them (and _shutdown is already True, so a retry is a
+            # no-op).
+            for orphan in self._orphans:
+                self._safe_close(orphan)
+            self._orphans.clear()
+            self._safe_close(self._pipeline)
 
     def reload(self, new_config: Config) -> None:
-        if self._shutdown or not self._aps.running:
-            logger.warning("reload ignored: scheduler not running")
-            return
-        self._aps.pause()
-        # pause() only suppresses NEW triggers; a job already being dispatched
-        # could in principle append to _active_ids just after drain sees empty.
-        # Acceptable: 1-minute cron granularity and the 5s reload poll cadence
-        # dwarf the sub-ms dispatch window.
-        drained = self._drain(self._drain_timeout)
+        with self._reload_lock:
+            if self._shutdown or not self._aps.running:
+                logger.warning("reload ignored: scheduler not running")
+                return
+            self._aps.pause()
+            # pause() only suppresses NEW triggers. A job already being dispatched
+            # by APScheduler could still call _run; it registers in _active_ids
+            # under _cond before reading self._pipeline, so the drain below either
+            # waits for it (registered first) or it reads the post-swap pipeline.
+            drained = False
+            with self._cond:
+                drained = self._cond.wait_for(
+                    lambda: not self._active_ids, timeout=self._drain_timeout
+                )
+                old_pipeline = self._pipeline
+                try:
+                    new_pipeline = self._pipeline_factory(new_config, self._state)
+                except Exception:  # noqa: BLE001 - a bad config must not brick us
+                    logger.exception(
+                        "reload aborted: could not build pipeline for new config; "
+                        "keeping current"
+                    )
+                    self._aps.resume()
+                    return
+                # Swap under the same lock the drain waited on, so no run can
+                # capture the old pipeline after this point.
+                self._pipeline = new_pipeline
+                self._config = new_config
 
-        old_pipeline = self._pipeline
-        self._pipeline = self._pipeline_factory(new_config, self._state)
-        self._config = new_config
-        self._register_jobs()
-        self._aps.resume()
+            if not drained:
+                logger.warning("drain timed out during reload with active run(s)")
 
-        if drained:
-            self._safe_close(old_pipeline)
-        else:
-            logger.warning(
-                "reload could not drain; deferring old pipeline close to shutdown"
-            )
-            self._orphans.append(old_pipeline)
+            self._register_jobs()
+            self._aps.resume()
+
+            if drained:
+                self._safe_close(old_pipeline)
+            else:
+                logger.warning(
+                    "reload could not drain; deferring old pipeline close to shutdown"
+                )
+                self._orphans.append(old_pipeline)
