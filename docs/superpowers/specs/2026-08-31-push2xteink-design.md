@@ -1,0 +1,370 @@
+# push2xteink 设计文档
+
+日期：2026-08-31
+状态：待实现
+
+## 1. 目标
+
+在一台常开的 Linux 服务器上，用单个 Docker 容器运行一个服务：
+
+- 配置若干 RSS 源和「推送任务」
+- 定时执行任务：抓取各源的新文章 → 可选抓全文 → 可选 AI 总结 → 生成 EPUB/TXT → 上传到 xteink，文件自动出现在绑定的阅读器上
+- 提供一个轻量 Web 管理界面维护配置、查看执行历史、手动触发
+
+非目标：多用户、内容存档、阅读器功能、统计图表、RSS 在线阅读。
+
+## 2. 技术选型
+
+- Python 3.12
+- FastAPI —— Web API + 服务端渲染页面
+- HTMX（配极简 Alpine.js）—— 前端交互，不引入前端构建链
+- APScheduler —— cron 调度，支持热重载
+- feedparser —— RSS/Atom 解析
+- trafilatura —— 正文提取
+- ebooklib —— EPUB 生成
+- httpx —— 所有 HTTP 请求（支持代理）
+- pydantic v2 —— 配置与数据模型校验
+- ruamel.yaml —— 读写 config.yaml 并保留注释
+- SQLite（标准库 sqlite3）—— 状态存储
+- 测试：pytest、respx（HTTP mock）
+
+部署为单容器单进程，Web 与调度器在同一进程内。`./data` 卷挂载，内含 `config.yaml` 和 `state.db`。
+
+## 3. 架构总览
+
+```
+                    ┌─────────────────────────────────┐
+  config.yaml ────► │  push2xteink (单进程 Docker)     │
+                    │                                 │
+                    │  ├── Web 管理界面 (FastAPI+HTMX) │  ◄── 浏览器
+                    │  ├── 调度器 (APScheduler)        │
+                    │  └── 任务执行流水线              │
+                    │      fetch → dedup → extract →   │
+                    │      summarize → build → upload  │
+                    │                                 │
+  state.db ◄──────► │  (SQLite: seen_items / runs)     │
+                    └─────────────────────────────────┘
+                             │
+                             ▼  三步上传
+                    api-prod.xteink.cn → 阿里云 OSS → callback
+                             │
+                             ▼
+                    绑定的阅读器（阅星曈 X4）
+```
+
+模块边界（`src/push2xteink/`）：
+
+| 模块 | 职责 | 依赖 |
+|---|---|---|
+| `config.py` | 加载 / 校验 / 写回 `config.yaml` | models, ruamel.yaml |
+| `models.py` | 所有配置段的 pydantic 模型 | pydantic |
+| `state.py` | SQLite 读写：`seen_items`、`runs` | sqlite3 |
+| `feeds.py` | 拉取 RSS、按 `seen_items` 去重、写入新条目 | feedparser, httpx, state |
+| `extract.py` | 抓文章链接、正文提取、失败回退 | trafilatura, httpx |
+| `summarize.py` | OpenAI 兼容客户端，primary/fallback 切换 | httpx |
+| `builders/epub.py` `builders/txt.py` | 由条目列表生成文件 | ebooklib |
+| `xteink.py` | `XteinkClient`：登录 + 三步上传 | httpx, state（token 缓存） |
+| `pipeline.py` | 编排单个任务的执行（步骤 1→7） | 上述全部 |
+| `scheduler.py` | 从 config 装载 cron 任务，热重载 | APScheduler, pipeline |
+| `web/app.py` | REST API + HTMX 页面 | config, state, scheduler, pipeline |
+| `__main__.py` | 启动 web + scheduler 单进程 | web, scheduler |
+
+## 4. 配置格式（config.yaml）
+
+Web 界面与手工编辑读写同一个文件。所有改动写回后热更新调度器，无需重启容器。
+
+```yaml
+xteink:
+  api_base: https://api-prod.xteink.cn
+  username: "<手机号>"
+  password: "<密码>"
+
+proxy:
+  url: http://127.0.0.1:7890        # 或 socks5://host:port；空则无代理
+
+ai:
+  use_proxy: false                  # AI 请求是否走 proxy.url
+  primary:
+    base_url: https://api.example.com/v1
+    api_key: "<key>"
+    model: gpt-4o-mini
+  fallback:                         # 可选；primary 失败时启用
+    base_url: https://api.backup.com/v1
+    api_key: "<key>"
+    model: claude-3-5-haiku
+  prompt: |                         # 可选，有内置默认值
+    用中文简洁总结以下文章要点，3-5 条。
+  timeout_seconds: 60
+  max_retries: 2
+  qps: 1                            # AI 调用限流
+
+fetch:
+  timeout_seconds: 20
+  concurrency: 5
+
+feeds:
+  - id: hn
+    url: https://news.ycombinator.com/rss
+    full_text: true                 # 默认 true；失败回退 RSS 内容
+    use_proxy: true                  # 默认 false；该源 RSS 抓取 + 全文抓取走代理
+  - id: ruanyifeng
+    url: http://www.ruanyifeng.com/blog/atom.xml
+
+tasks:
+  - id: morning-brief
+    name: 早报
+    feeds: [hn, ruanyifeng]
+    schedule: "0 7 * * *"           # 标准 5 段 cron
+    summarize: true                  # 默认 false
+    format: epub                     # epub | txt；默认 epub
+    enabled: true
+    first_run_lookback_hours: 48     # 仅任务从未成功执行过时生效
+```
+
+校验规则：
+
+- `tasks[].feeds` 中每个 id 必须在 `feeds` 中存在
+- `tasks[].id` / `feeds[].id` 唯一
+- `schedule` 必须是合法 cron
+- `summarize: true` 时 `ai.primary` 必须完整
+- `format` ∈ {epub, txt}
+
+## 5. 状态存储（state.db，SQLite）
+
+用户不直接接触。
+
+```sql
+CREATE TABLE seen_items (
+  feed_id     TEXT NOT NULL,
+  item_guid   TEXT NOT NULL,        -- RSS entry id/guid，缺失时回退 link
+  first_seen_at TEXT NOT NULL,      -- ISO8601 UTC
+  pushed_at   TEXT,                 -- 上传成功后填入；NULL = 尚未推送
+  PRIMARY KEY (feed_id, item_guid)
+);
+
+CREATE TABLE runs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     TEXT NOT NULL,
+  started_at  TEXT NOT NULL,
+  finished_at TEXT,
+  status      TEXT NOT NULL,        -- running | success | skipped | failed
+  item_count  INTEGER,
+  file_name   TEXT,
+  message     TEXT                  -- 错误或告警详情（多行）
+);
+
+CREATE TABLE kv (
+  key   TEXT PRIMARY KEY,           -- 例：xteink_access_token
+  value TEXT,
+  updated_at TEXT
+);
+```
+
+token 缓存放 `kv` 表（`xteink_access_token` + `xteink_token_obtained_at`）。
+
+## 6. 任务执行流水线（pipeline.py）
+
+调度器或 Web「立即执行」触发某个 task，走同一段代码：
+
+```
+0. 在 runs 插入一行 status=running
+
+1. 加载源
+   对 task.feeds 每个 feed：feedparser 拉取（use_proxy 则走代理）
+   拉取失败 → 记入本次 run 的告警，跳过该源，继续其它源
+
+2. 去重
+   对每个 entry 取 guid（id/guid，缺失回退 link）
+   查 seen_items：已存在 → 跳过
+   新 entry：
+     若该 task 在 runs 中没有任何 status=success 记录（首次）→
+       仅保留发布时间在 now - first_run_lookback_hours 之内的
+     写入 seen_items（pushed_at = NULL）
+   汇总本次待推送条目列表 items；为空 → 跳到步骤 7，status=skipped
+
+3. 取正文
+   对每个 item：
+     feed.full_text=true → 用 httpx 抓 item.link（按 feed.use_proxy）
+       → trafilatura 提取正文
+       → 失败 / 超时 / 正文过短(<200 字) → 回退用 RSS 的 content/summary
+     feed.full_text=false → 直接用 RSS content/summary
+   条目间用并发池（fetch.concurrency）
+
+4. AI 总结（仅 task.summarize=true）
+   对每个 item 调 ai.primary（遵守 ai.qps 限流、timeout、max_retries）
+     异常/超时耗尽重试 → 若配置了 ai.fallback，用 fallback 再试一轮
+     仍失败 → 该条跳过总结，记 run 告警
+   章节正文结构：
+     [AI 摘要段落] + <hr/> + [正文 HTML]
+   summarize=false → 章节只有正文
+
+5. 生成文件
+   标题：f"{task.name}_{YYYYMMDD}"（同日同任务重复执行追加 _{HHMMSS}）
+   format=epub → ebooklib：
+     书名 = 标题；每个 item 一章；生成目录(NCX/nav)
+     章节头部含文章标题、来源、原文链接、发布时间
+   format=txt → 纯文本：每条 "# 标题\n来源 · 链接 · 时间\n\n[摘要]\n---\n[正文纯文本]"，条目间空行 + 分隔线
+   EPUB 成品 < 256 字节 → 视为异常，status=failed，不上传
+
+6. 上传
+   XteinkClient.push_file(path, filename)
+   成功 → 把本次 items 对应 seen_items 行的 pushed_at 置为 now
+   失败（XteinkUploadError）→ 不更新 pushed_at；status=failed；message 记错误
+     下次执行时这些条目仍无 pushed_at，但 guid 已在 seen_items —— 见下方说明
+
+7. 收尾
+   更新 runs 行：finished_at、status、item_count、file_name、message
+
+去重与重试的一致性：
+- 步骤 2 写入 seen_items 时 pushed_at=NULL。
+- 判定「新条目」的依据是 guid 是否存在于 seen_items —— 因此上传失败后，
+  下次执行同一任务时这些条目不会被重新当作「新」。
+- 解决：步骤 2 的「新条目」判定改为 `guid 不存在 OR (存在且 pushed_at IS NULL
+  且 first_seen_at 在最近 N 小时内)`，N = first_run_lookback_hours。
+  即未成功推送的条目在窗口期内会被重试，超期则放弃，避免永久卡住或无限堆积。
+```
+
+失败隔离原则：
+
+- 单个源拉取失败不影响其它源
+- 单条正文抓取失败 → 回退，不影响该条入库
+- 单条 AI 总结失败 → 跳过总结，不影响成文
+- 上传失败 → 整个 run failed，条目按上面规则在窗口内重试
+
+## 7. xteink 上传器（xteink.py）
+
+对外接口：`XteinkClient.push_file(path: Path, filename: str) -> str`（返回 record_id）。
+
+已通过抓包确认的协议（base = `https://api-prod.xteink.cn`）：
+
+### 7.1 登录
+
+```
+POST /auth/login
+body(JSON): {"username": "...", "password": "..."}
+resp: {"access_token": "...", "refresh_token": "...", "expires_in": <秒>, ...}
+```
+
+- access_token 有效期约 29 天。不使用 refresh 接口；token 过期或不存在时用账号密码重新登录。
+- token 与获取时间缓存在 `state.kv`。判定过期：`now - obtained_at > expires_in - 1天` 的安全余量。
+- 后续所有 api-prod 请求头：`Authorization: Bearer <access_token>`。
+- 任一 api-prod 请求返回 401 → 清除缓存 token，重新登录一次并重试该请求；再失败则抛错。
+
+### 7.2 三步上传
+
+```
+步骤 A — 申请签名
+POST /api/v1/upload/signature
+body(JSON): {
+  "filename": "<标题>_<YYYYMMDD>.epub",
+  "content_type": "application/epub+zip",   # txt → "text/plain"
+  "file_md5": "<hex md5>",
+  "file_size": <bytes>,
+  "prefix": "uploads/book"
+}
+resp: {
+  "success": true,
+  "host": "https://domestic-static-file.oss-cn-hangzhou.aliyuncs.com",
+  "key": "uploads/book/.../<filename>",
+  "policy": "<base64>",
+  "signature": "<base64>",
+  "access_key_id": "LTAI...",
+  "download_url": "...",
+  "instant_upload": <bool>
+}
+# instant_upload=true 时 OSS 已有同 md5 文件，可跳过步骤 B。
+
+步骤 B — 上传到 OSS
+POST {host}
+content-type: multipart/form-data
+fields:
+  key           = <resp.key>
+  policy        = <resp.policy>
+  OSSAccessKeyId= <resp.access_key_id>
+  signature     = <resp.signature>
+  Content-Type  = <content_type>
+  file          = <文件二进制>
+期望响应: 204 No Content
+（此步骤不带 Authorization 头，不走代理）
+
+步骤 C — 回调确认
+POST /api/v1/upload/callback
+body(JSON): {
+  "oss_key": <resp.key>,
+  "filename": <filename>,
+  "file_size": <bytes>,
+  "file_md5": "<hex md5>",
+  "content_type": "application/epub+zip"
+}
+resp: {"success": true, "record_id": "...", "download_url": "...", "size_mb": ...}
+```
+
+抓包确认：callback 之后没有其它请求；上传到 `uploads/book` 后文件即自动同步到绑定阅读器，无需显式「发送到设备」调用。
+
+设备信息（`GET /api/v1/device/binding` 可查，当前实现不需要主动调用）：
+绑定设备 `阅星曈 X4`，480×800，binding id `836d59b7-9263-44bd-aba2-04fd786d2eb1`。
+
+### 7.3 错误处理
+
+- 任一步非预期状态码 → `XteinkUploadError`，附步骤名与响应体
+- OSS policy 对 EPUB 有 `content-length-range` 下限（256 字节），生成阶段已校验
+- content_type 由文件扩展名映射：`.epub → application/epub+zip`、`.txt → text/plain`
+
+## 8. Web 管理界面（web/）
+
+无用户系统。可选：`.env` 里设 `WEB_PASSWORD`，非空时对所有页面/接口启用 HTTP Basic Auth。
+
+页面（HTMX 局部刷新）：
+
+| 区域 | 功能 |
+|---|---|
+| 任务列表 | 每个 task：名称、下次执行时间、上次 run 结果徽标、启用开关、「立即执行」「编辑」「删除」 |
+| 任务编辑 | 名称、选源（多选）、cron（输入框 + 常用预设按钮 + 人类可读预览）、summarize、format、first_run_lookback_hours |
+| 源管理 | 每个 feed：url、full_text、use_proxy；「测试」→ 立即拉取，显示最新 5 条标题 + 每条全文提取成功与否 |
+| 执行历史 | runs 倒序：时间、任务、条目数、文件名、状态、message；failed 的可「重跑」 |
+| 设置 | 编辑 xteink / proxy / ai / fetch 段；「测试连接」分别验证：AI（primary/fallback 各发一个极短请求）、xteink（登录）、proxy（连通性） |
+
+REST API：`/api/tasks`、`/api/feeds`、`/api/runs`、`/api/settings`、`/api/tasks/{id}/run`、`/api/feeds/{id}/test`、`/api/test/{ai|xteink|proxy}`。
+
+配置写回：用 ruamel.yaml 保留注释；写回后调用 `scheduler.reload()` 重建 job。
+
+## 9. 调度器（scheduler.py）
+
+- 启动时读 config，为每个 `enabled: true` 的 task 用 `CronTrigger.from_crontab(task.schedule)` 注册 job
+- job 函数 = `pipeline.run_task(task_id)`
+- `reload()`：移除全部 job，按当前 config 重新注册（配置变更后调用）
+- 同一 task 不并发执行（`max_instances=1`，`coalesce=True`）
+- misfire（容器停机错过）：`misfire_grace_time` 设为较大值或 None，重启后补跑一次
+
+## 10. 部署
+
+```
+Dockerfile         —— python:3.12-slim，装依赖，CMD python -m push2xteink
+docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（默认 8080），
+                      环境变量 CONFIG_PATH=/data/config.yaml、DB_PATH=/data/state.db、
+                      WEB_PASSWORD（可选）
+```
+
+首次启动若 `config.yaml` 不存在 → 写一份带注释的样例并提示用户填写。
+
+## 11. 测试策略（TDD）
+
+| 层 | 方法 |
+|---|---|
+| config / models | 样例 yaml 往返；校验错误（未知 feed id、非法 cron、summarize 缺 ai）；默认值 |
+| state | 内存 SQLite；去重；首次执行窗口；未推送条目窗口内重试、超期放弃；pushed_at 标记时机 |
+| feeds | 本地 RSS xml fixture；respx mock；guid 缺失回退 link |
+| extract | 本地 HTML fixture；提取成功 / 正文过短回退 / 抓取超时回退 |
+| summarize | respx mock；primary 成功 / primary 失败→fallback 成功 / 两者都失败→跳过 |
+| builders | 生成 EPUB 后用 ebooklib 读回校验章节数与标题；txt 结构；EPUB 最小尺寸 |
+| xteink | respx mock 三步 + OSS + 登录；校验 md5 / 表单字段 / content_type 映射 / 401 重登 / instant_upload 跳过步骤 B；不打真实接口 |
+| pipeline | 全 mock 端到端：单源失败不影响其它源；上传失败不写 pushed_at；无新条目 → skipped |
+| web | FastAPI TestClient：CRUD、`/tasks/{id}/run` 触发、Basic Auth 开关 |
+
+手动冒烟（非 CI）：`scripts/smoke_xteink.py` —— 真实登录 + 上传一个小 TXT，确认线上接口未变。
+
+## 12. 待实现时确认的小项
+
+- EPUB 章节内的图片：先不下载内嵌，保留/剥离 `<img>` 待实现时定（倾向剥离，e-ink 意义不大）
+- `qps` 限流的实现（简单 sleep 间隔即可）
+- Web 端口、默认 lookback 等常量的最终取值
