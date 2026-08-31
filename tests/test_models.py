@@ -96,6 +96,41 @@ def test_summarize_without_ai_rejected(valid_config_dict):
         Config.model_validate(valid_config_dict)
 
 
+@pytest.mark.parametrize(
+    "section, patch",
+    [
+        ("ai", {"qps": 0}),
+        ("ai", {"max_retries": -1}),
+        ("ai", {"timeout_seconds": 0}),
+        ("fetch", {"concurrency": 0}),
+        ("fetch", {"timeout_seconds": 0}),
+    ],
+)
+def test_numeric_lower_bounds_rejected(valid_config_dict, section, patch):
+    if section == "fetch":
+        valid_config_dict["fetch"] = patch
+    else:
+        valid_config_dict["ai"].update(patch)
+    with pytest.raises(ValidationError):
+        Config.model_validate(valid_config_dict)
+
+
+def test_first_run_lookback_hours_zero_rejected(valid_config_dict):
+    valid_config_dict["tasks"][0]["first_run_lookback_hours"] = 0
+    with pytest.raises(ValidationError):
+        Config.model_validate(valid_config_dict)
+
+
+def test_unknown_key_rejected(valid_config_dict):
+    valid_config_dict["notes"] = "keep me"
+    with pytest.raises(ValidationError):
+        Config.model_validate(valid_config_dict)
+    valid_config_dict.pop("notes")
+    valid_config_dict["feeds"][0]["feed_url"] = "typo"
+    with pytest.raises(ValidationError):
+        Config.model_validate(valid_config_dict)
+
+
 def test_article_minimal():
     a = Article(feed_id="hn", guid="g1", title="T", link="https://x/1")
     assert a.published_at is None

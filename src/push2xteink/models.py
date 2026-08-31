@@ -4,43 +4,55 @@ from datetime import datetime
 from typing import Literal
 
 from apscheduler.triggers.cron import CronTrigger
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_PROMPT = "用中文简洁总结以下文章的核心要点，输出 3-5 条要点，每条一行。"
 
 
 class AIProvider(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     base_url: str
     api_key: str
     model: str
 
 
 class AIConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     primary: AIProvider
     fallback: AIProvider | None = None
     use_proxy: bool = False
     prompt: str = DEFAULT_PROMPT
-    timeout_seconds: int = 60
-    max_retries: int = 2
-    qps: float = 1.0
+    timeout_seconds: int = Field(60, gt=0)
+    max_retries: int = Field(2, ge=0)
+    qps: float = Field(1.0, gt=0)
 
 
 class XteinkConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     username: str
     password: str
     api_base: str = "https://api-prod.xteink.cn"
 
 
 class ProxyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: str | None = None
 
 
 class FetchConfig(BaseModel):
-    timeout_seconds: int = 20
-    concurrency: int = 5
+    model_config = ConfigDict(extra="forbid")
+
+    timeout_seconds: int = Field(20, gt=0)
+    concurrency: int = Field(5, gt=0)
 
 
 class Feed(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     url: str
     full_text: bool = True
@@ -48,6 +60,8 @@ class Feed(BaseModel):
 
 
 class Task(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     name: str
     feeds: list[str]
@@ -55,10 +69,12 @@ class Task(BaseModel):
     summarize: bool = False
     format: Literal["epub", "txt"] = "epub"
     enabled: bool = True
-    first_run_lookback_hours: int = 48
+    first_run_lookback_hours: int = Field(48, gt=0)
 
 
 class Config(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     xteink: XteinkConfig
     feeds: list[Feed]
     tasks: list[Task]
