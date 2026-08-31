@@ -1,7 +1,9 @@
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
-from push2xteink.models import Config, DEFAULT_PROMPT
+from push2xteink.models import Article, Config, DEFAULT_PROMPT
 
 
 def test_valid_config_parses(valid_config_dict):
@@ -92,3 +94,28 @@ def test_summarize_without_ai_rejected(valid_config_dict):
     # tasks[0].summarize 仍为 True
     with pytest.raises(ValidationError, match="summarize=true"):
         Config.model_validate(valid_config_dict)
+
+
+def test_article_minimal():
+    a = Article(feed_id="hn", guid="g1", title="T", link="https://x/1")
+    assert a.published_at is None
+    assert a.summary is None
+    assert a.content_html == ""
+    assert a.content_is_full_text is False
+
+
+def test_article_full():
+    a = Article(
+        feed_id="hn",
+        guid="g1",
+        title="T",
+        link="https://x/1",
+        published_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+        author="A",
+        source_title="Hacker News",
+        content_html="<p>body</p>",
+        content_is_full_text=True,
+        summary="- 要点",
+    )
+    assert a.content_is_full_text is True
+    assert a.published_at.year == 2026
