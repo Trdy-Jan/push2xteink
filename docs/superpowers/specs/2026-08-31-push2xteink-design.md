@@ -378,3 +378,13 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **`State` 已线程安全**：`check_same_thread=False` + WAL + `busy_timeout=5000` + 每方法一把 `threading.Lock`。P3/P4/P5 可安全在多线程（FastAPI 请求线程 + APScheduler worker）共享同一个 `State` 实例，无需每线程新建。
 - **数值下限已在模型层强制**：`qps` / `timeout_seconds` / `concurrency` / `first_run_lookback_hours` 均 `> 0`，`max_retries >= 0`。P2c 的 `1/qps` 限流器不会遇到 0。
 - **`runs.status` 有 DB CHECK 约束**：只接受 `running|success|skipped|failed`。`finish_run` 的 `status` 参数是 `Literal`。注意 CHECK 只对新建 DB 生效，P1 尚无迁移机制——后续若改 `_SCHEMA` 需要迁移策略。
+
+## 14. P2 实现后补充（整体复审发现，供 P3–P6）
+
+- **HTTP 客户端统一走 `push2xteink.http.make_client`**：`trust_env=False`（绝不读环境 `HTTP(S)_PROXY`，代理只能显式传），共享模块级 `ssl.SSLContext`（certifi CA），固定 UA，`follow_redirects` 默认 True。P3 及后续所有 httpx 调用都用它，不要直接 `httpx.Client(...)`。每次新建 client 在有环境代理的机器上约 0.43s，这是唯一原因让 P2 测试从 37s 降到 2s。
+- **`Summarizer` / `XteinkClient` 有生命周期**：各自持有长期 httpx client，提供 `close()` / `__enter__` / `__exit__`（+ `__del__` 兜底）。**P3 应在每次 config reload 时 `close()` 旧实例、重建新实例**，而不是每个 run 新建。两者跨线程共享安全（`Summarizer` 靠内部锁，`XteinkClient` 靠 P1 线程安全的 `State`）。
+- **P3 用 `push2xteink.builders.common.html_to_text(html) -> str`** 把 `Article.content_html` 转成纯文本喂给 `Summarizer.summarize(text)`。不要把原始 HTML 直接给 LLM。
+- **`Article.published_at` 时区不变量未在类型层强制**：`feeds.fetch_feed` 产出的都是 aware UTC，但 `models.Article.published_at: datetime | None` 没有 aware 约束；`select_new_articles` 对 naive `now` 有防护、对 naive `published_at` 没有；`builders.format_published` 对 naive 会静默按本地时区偏移。**P1 follow-up**：把字段改成 `pydantic.AwareDatetime | None`，一次性关掉这一类。
+- **`ProxyConfig.url` 无 scheme 校验**：`http://` / `socks5://` 前缀写错（如 `127.0.0.1:7890`）在 P2 只会在运行时被各模块捕获成 per-feed 警告（已加 `ValueError` 到 guard）。**P4/P5 在 config load 阶段校验 scheme**，让用户改配置时立刻报错。
+- **`xteink` 上传对非预期响应体已全部收敛为 `XteinkUploadError`**：login/signature/callback 三处 JSON 解析都过 `_json_dict`（非 JSON body、非 dict body、缺字段、`success:false` 都抛 `XteinkUploadError`）。P3 的失败隔离 `except XteinkUploadError` 可靠。
+- **已知延后的小项**（不阻塞 P3）：`Summarizer` 重试无退避（默认 qps=1 时恰好有 1s 间隔）；`safe_filename` 按码点而非字节截断（超长 CJK 任务名可能超 255 字节 `NAME_MAX`）；`select_new_articles(state, feed_id, articles, ...)` 的 `feed_id` 参数与 `Article.feed_id` 冗余。
