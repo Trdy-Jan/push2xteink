@@ -89,8 +89,17 @@ class Scheduler:
             return len(self._active_ids)
 
     def start(self) -> None:
+        if self._shutdown or self._aps.running:
+            return
         self._register_jobs()
         self._aps.start()
+
+    @staticmethod
+    def _safe_close(pipeline: Pipeline) -> None:
+        try:
+            pipeline.close()
+        except Exception:  # noqa: BLE001 - close is best-effort; never mask shutdown
+            logger.exception("pipeline close() raised during shutdown/reload")
 
     def _drain(self, timeout: float) -> bool:
         with self._cond:
@@ -106,13 +115,22 @@ class Scheduler:
         if self._aps.running:
             self._aps.shutdown(wait=wait)
         self._drain(self._drain_timeout)
-        self._pipeline.close()
+        # Close orphans first: a raise in the current pipeline's close() must not
+        # strand them (and _shutdown is already True, so a retry is a no-op).
         for orphan in self._orphans:
-            orphan.close()
+            self._safe_close(orphan)
         self._orphans.clear()
+        self._safe_close(self._pipeline)
 
     def reload(self, new_config: Config) -> None:
+        if self._shutdown or not self._aps.running:
+            logger.warning("reload ignored: scheduler not running")
+            return
         self._aps.pause()
+        # pause() only suppresses NEW triggers; a job already being dispatched
+        # could in principle append to _active_ids just after drain sees empty.
+        # Acceptable: 1-minute cron granularity and the 5s reload poll cadence
+        # dwarf the sub-ms dispatch window.
         drained = self._drain(self._drain_timeout)
 
         old_pipeline = self._pipeline
@@ -122,7 +140,7 @@ class Scheduler:
         self._aps.resume()
 
         if drained:
-            old_pipeline.close()
+            self._safe_close(old_pipeline)
         else:
             logger.warning(
                 "reload could not drain; deferring old pipeline close to shutdown"

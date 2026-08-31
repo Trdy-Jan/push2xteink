@@ -26,7 +26,7 @@ class FakePipeline:
     def run_task(self, task_id, *, now=None):
         self.calls.append(task_id)
         if self.block is not None:
-            self.block.wait()
+            self.block.wait(timeout=5)
         return RunOutcome(task_id, "success", 1, "f.epub", "rec", None)
     def close(self): self.closed = True
 
@@ -71,8 +71,10 @@ def test_active_count_tracks_in_flight_run(tmp_path):
     for _ in range(200):
         if fp.calls: break
         __import__("time").sleep(0.01)
-    assert s.active_count == 1
-    fp.block.set(); t.join(timeout=5)
+    try:
+        assert s.active_count == 1
+    finally:
+        fp.block.set(); t.join(timeout=5)
     assert s.active_count == 0
     st.close()
 
@@ -169,4 +171,50 @@ def test_reload_waits_for_in_flight_run_before_closing_old_pipeline(tmp_path):
     assert old.closed is True         # closed only after the run finished
     t.join(timeout=5)
     s.shutdown()
+    st.close()
+
+
+def test_double_start_is_noop(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, _ = _sched(_config(), st)
+    s.start()
+    try:
+        s.start()  # no SchedulerAlreadyRunningError
+        assert s._aps.running
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_reload_after_shutdown_is_noop(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, _ = _sched(_config(), st)
+    s.start()
+    s.shutdown()
+    s.reload(_config())  # no SchedulerNotRunningError
+    s.start()            # also a no-op post-shutdown
+    assert s._aps.running is False
+    st.close()
+
+
+def test_shutdown_closes_orphans_even_if_current_pipeline_close_raises(tmp_path):
+    st = State(tmp_path / "s.db")
+    made = []
+    def factory(c, s):
+        fp = FakePipeline(); made.append(fp); return fp
+    s = Scheduler(_config(), st, pipeline_factory=factory, drain_timeout=0.05)
+    s.start()
+    old = made[0]; old.block = threading.Event()
+    t = threading.Thread(target=s.run_now, args=("t1",)); t.start()
+    for _ in range(200):
+        if old.calls: break
+        __import__("time").sleep(0.01)
+    s.reload(_config())               # drain times out -> old deferred to _orphans
+    old.block.set(); t.join(timeout=5)
+    assert s._orphans == [old]
+    current = made[1]
+    def boom(): raise RuntimeError("close failed")
+    current.close = boom
+    s.shutdown()                      # must not raise; orphan still closed
+    assert old.closed is True
     st.close()
