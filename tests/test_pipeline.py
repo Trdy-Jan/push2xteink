@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from push2xteink.pipeline import Pipeline, RunOutcome
@@ -372,4 +373,43 @@ def test_run_task_naive_now_accepted(pipeline_config, tmp_path, monkeypatch):
     p = _full_pipe(pipeline_config, s, monkeypatch)
     out = p.run_task("brief", now=datetime(2026, 8, 31, 12, 0))  # naive
     assert out.status == "success"
+    s.close()
+
+
+# --- C1: run_task must never raise -------------------------------------------
+
+
+def test_run_task_start_run_failure_returns_failed_no_row(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    p = _full_pipe(pipeline_config, s, monkeypatch)
+    monkeypatch.setattr(s, "start_run",
+                        lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "failed" and "could not start run" in out.message
+    assert s.recent_runs(10) == []  # no row written
+    s.close()
+
+
+def test_run_task_finish_run_failure_on_success_does_not_propagate(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    fx = FakeXteink()
+    p = _full_pipe(pipeline_config, s, monkeypatch, xteink=fx)
+    monkeypatch.setattr(s, "finish_run",
+                        lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("boom")))
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "success" and out.item_count == 2
+    assert fx.pushed  # upload still happened
+    s.close()
+
+
+def test_run_task_finish_run_failure_on_failure_path_does_not_propagate(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    class FailXteink:
+        def push_file(self, p, f): raise XteinkUploadError("500")
+        def close(self): pass
+    p = _full_pipe(pipeline_config, s, monkeypatch, xteink=FailXteink())
+    monkeypatch.setattr(s, "finish_run",
+                        lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("boom")))
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "failed" and "XteinkUploadError" in out.message
     s.close()

@@ -178,6 +178,12 @@ class Pipeline:
             parts.append(extra)
         return "\n".join(parts) if parts else None
 
+    def _finish(self, run_id: int, **kw: object) -> None:
+        try:
+            self._state.finish_run(run_id, **kw)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 - run row is best-effort; never mask the outcome
+            pass
+
     def run_task(self, task_id: str, *, now: datetime | None = None) -> RunOutcome:
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
@@ -188,21 +194,30 @@ class Pipeline:
         except KeyError:
             return RunOutcome(task_id, "failed", message=f"unknown task {task_id!r}")
 
-        run_id = self._state.start_run(task_id, now=now)
+        try:
+            run_id = self._state.start_run(task_id, now=now)
+        except Exception as exc:  # noqa: BLE001 - a DB failure here yields no runs row
+            return RunOutcome(task_id, "failed", message=f"could not start run: {exc!r}")
+
         warnings: list[str] = []
-        if self._output_dir is not None:
-            work_dir = self._output_dir
-            work_dir.mkdir(parents=True, exist_ok=True)
-            own_dir = False
-        else:
-            work_dir = Path(tempfile.mkdtemp(prefix="p2x-"))
-            own_dir = True
+        try:
+            if self._output_dir is not None:
+                work_dir = self._output_dir
+                work_dir.mkdir(parents=True, exist_ok=True)
+                own_dir = False
+            else:
+                work_dir = Path(tempfile.mkdtemp(prefix="p2x-"))
+                own_dir = True
+        except OSError as exc:
+            msg = f"could not create work dir: {exc!r}"
+            self._finish(run_id, status="failed", message=msg, now=now)
+            return RunOutcome(task_id, "failed", message=msg)
 
         try:
             articles, kept_guids = self._gather(task, now=now, warnings=warnings)
             if not articles:
                 msg = self._join(warnings, "no new items")
-                self._state.finish_run(
+                self._finish(
                     run_id, status="skipped", item_count=0, message=msg, now=now
                 )
                 return RunOutcome(task_id, "skipped", 0, message=msg)
@@ -211,11 +226,13 @@ class Pipeline:
             path = self._build(task, articles, now=now, out_dir=work_dir)
             record_id = self._xteink.push_file(path, path.name)
 
+            # A post-upload DB failure below leaves guids un-marked, so the same
+            # items re-push next run -- the safe direction (dup on reader, no loss).
             for feed_id, guids in kept_guids.items():
                 self._state.mark_pushed(feed_id, guids, now=now)
 
             msg = self._join(warnings, None)
-            self._state.finish_run(
+            self._finish(
                 run_id, status="success", item_count=len(articles),
                 file_name=path.name, message=msg, now=now,
             )
@@ -225,11 +242,11 @@ class Pipeline:
             )
         except (BuildError, XteinkUploadError) as exc:
             msg = self._join(warnings, f"{type(exc).__name__}: {exc}")
-            self._state.finish_run(run_id, status="failed", message=msg, now=now)
+            self._finish(run_id, status="failed", message=msg, now=now)
             return RunOutcome(task_id, "failed", message=msg)
         except Exception as exc:  # noqa: BLE001 - never let a run crash the scheduler
             msg = self._join(warnings, f"unexpected error: {exc!r}")
-            self._state.finish_run(run_id, status="failed", message=msg, now=now)
+            self._finish(run_id, status="failed", message=msg, now=now)
             return RunOutcome(task_id, "failed", message=msg)
         finally:
             if own_dir:
