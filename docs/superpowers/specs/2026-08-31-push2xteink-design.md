@@ -333,8 +333,8 @@ REST API：`/api/tasks`、`/api/feeds`、`/api/runs`、`/api/settings`、`/api/t
 - 启动时读 config，为每个 `enabled: true` 的 task 用 `CronTrigger.from_crontab(task.schedule)` 注册 job
 - job 函数 = `pipeline.run_task(task_id)`
 - `reload()`：移除全部 job，按当前 config 重新注册（配置变更后调用）
-- 同一 task 不并发执行（`max_instances=1`，`coalesce=True`）
-- misfire（容器停机错过）：`misfire_grace_time` 设为较大值或 None，重启后补跑一次
+- 同一 task 不并发执行（`max_instances=1`，`coalesce=True`）；`run_now` / `submit` 也必须遵守这一不变量（P4：`run_now` 在 task 已 active 时返回 `skipped`）
+- misfire：使用内存 jobstore，容器停机期间错过的运行**不会**在重启后补跑（`next_run_time` 重新向前计算）。可接受：`first_run_lookback_hours` + `seen_items` 窗口内重试机制保证下一次调度运行仍会拾起未推送条目。`misfire_grace_time=None` 只影响存活进程内的 misfire（例如一次较长的 reload pause）
 
 ## 10. 部署
 
@@ -397,3 +397,13 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **M3 —— 超长非 ASCII `task.name` 撑爆 `NAME_MAX`**：`_build` 的标题 `f"{task.name}_{now:%Y%m%d}"` 经 `safe_filename` 按码点截断；30+ 个 CJK 字符的任务名 UTF-8 编码后可能超 255 字节。**P1 follow-up（models.py）**：给 `Task.name` 加 `Field(..., max_length=60)`，在 config load 阶段就报错。属 P1 改动，此处仅记录。
 - **M8 —— 极短正文（RSS 摘要）跳过 AI 摘要**：不少 feed 的 `content_html` 本身就是一两句话的 blurb，再喂给 LLM 摘要既费钱又无收益。P4/P5 可在 `_prepare` 里对 `html_to_text` 后长度低于阈值（如 200 字）的文章直接跳过 `summarize`。成本优化，非正确性问题。
 - **APScheduler worker 池上限**：每个 job 内部 `_prepare` 会各自 fan out 一个 `ThreadPoolExecutor(fetch.concurrency)`。P4 配置调度器时必须把 executor 的 `max_workers` 压到 3–5，否则 N 个任务并发时线程数是 `N × concurrency`，会打爆下游 feed / AI 接口的限流。
+
+## P4 实现后补充（整体复审发现，供 P5–P6）
+
+- **P5 不要扩展 `_serve` 的 watch loop**：把它抽成一个 `_ConfigWatcher(path, on_change)` daemon 线程 helper（uvicorn 拥有主线程并安装自己的 SIGINT/SIGTERM）。P5 FastAPI lifespan：startup 构建 State + Scheduler + 启动 watcher；shutdown 停 watcher → `sched.shutdown()` → `state.close()`。
+- **`Scheduler.run_now` 是同步的**（阻塞调用方整个 pipeline run，数分钟）。网页「立即执行」按钮需要一个 fire-and-forget `Scheduler.submit(task_id)`，通过 APS executor 以一个独立 job id（`f"manual:{task_id}"`，**不是** `task_id`——`replace_existing` 会覆盖 cron job）派发，从而共享 4-worker 上限与 APS instance 计数。`run_now` 保留给 CLI / 测试。
+- **P5 网页保存 `config.yaml` 的 handler 应让 watcher 去 reload**（≤5s 延迟），不要直接调 `sched.reload()`——否则 watcher 会在 mtime 变化时再 reload 一次（双重 pause+drain）。
+- **P6 Dockerfile**：`ENV PYTHONUNBUFFERED=1`，让 `print()` 与日志实时写到 `docker logs`；`docker-compose.yml`：`stop_grace_period: 150s`（drain_timeout 是 120s；Docker 默认 10s 会在 `push_file` 中途 SIGKILL——按 mark_pushed-after-upload 不变量是安全的，只是吵）。
+- **misfire / 内存 jobstore**：见第 9 节修订——容器停机错过的运行不补跑，靠 lookback + `seen_items` 重试窗口兜底。
+- **已应用的复审修复**（本分支）：C1 reload 工厂异常不再 brick 调度器（`_serve` watch loop 兜底 `except Exception` 打印 `reload failed`）；I1 reload drain→swap 竞态（`_run` 在 `_cond` 下与注册原子地捕获 pipeline 引用，swap 也在同一把锁下）；I2 `reload()` / `shutdown()` 由 `threading.RLock` 串行化；I3 `run_now` 遵守非并发不变量并在 shutdown 后拒绝；M2 `shutdown` 改 `aps.shutdown(wait=False)` + 单次 bounded `_drain`（`drain_timeout` 也覆盖 cron job）；I5 `_serve` 顶部 `logging.basicConfig`；M1 mtime token 用 `(st_mtime_ns, st_size)`；M6 `start()` 失败时 `sched.shutdown()` 关掉已建 Pipeline 的 httpx client；M8 在 `load_config` 前读 mtime；M9 `start()` 后记录各 job 的 next run time。新增 P5-enabling accessor：`Scheduler.config`（property）、`Scheduler.next_run_time(task_id)`。
+- **延后**：M4（第二个信号升级为硬退出）、M5（生产信号路径无测试）——留给 P5 lifespan 改造。`seen_items` 定期 prune（见第 13 节）仍未做。
