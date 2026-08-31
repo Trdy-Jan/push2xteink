@@ -44,4 +44,24 @@ def load_config(path: Path) -> Config:
 
 
 def write_config(path: Path, config: Config) -> None:
-    raise NotImplementedError  # Task 6
+    path = Path(path)
+    if path.exists():
+        raw = _load_raw(path)
+    else:
+        from ruamel.yaml.comments import CommentedMap
+
+        raw = CommentedMap()
+
+    payload = config.model_dump(mode="python", exclude_none=True)
+    if payload.get("proxy") in ({}, {"url": None}):
+        payload.pop("proxy", None)
+
+    for key, value in payload.items():
+        raw[key] = value
+    for key in [k for k in raw.keys() if k not in payload]:
+        del raw[key]
+
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        _yaml.dump(raw, fh)
+    tmp.replace(path)

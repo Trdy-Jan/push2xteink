@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from push2xteink.config import ConfigError, load_config
+from push2xteink.config import ConfigError, load_config, write_config
 
 FIXTURE = Path(__file__).parent / "fixtures" / "config_valid.yaml"
 
@@ -54,3 +54,41 @@ def test_load_invalid_config(tmp_path):
     )
     with pytest.raises(ConfigError, match="unknown feed"):
         load_config(dst)
+
+
+def test_write_roundtrip_values(tmp_path):
+    dst = tmp_path / "config.yaml"
+    shutil.copy(FIXTURE, dst)
+    cfg = load_config(dst)
+    cfg.tasks[0].name = "晨间简报"
+    cfg.feeds.append(
+        type(cfg.feeds[0])(id="lobsters", url="https://lobste.rs/rss")
+    )
+    write_config(dst, cfg)
+
+    reloaded = load_config(dst)
+    assert reloaded.tasks[0].name == "晨间简报"
+    assert [f.id for f in reloaded.feeds] == ["hn", "lobsters"]
+    assert reloaded.feeds[1].full_text is True  # 默认值回填
+
+
+def test_write_preserves_header_comment(tmp_path):
+    dst = tmp_path / "config.yaml"
+    shutil.copy(FIXTURE, dst)
+    cfg = load_config(dst)
+    write_config(dst, cfg)
+    assert "# push2xteink config" in dst.read_text(encoding="utf-8")
+
+
+def test_write_creates_new_file(tmp_path):
+    dst = tmp_path / "fresh.yaml"
+    src_cfg = load_config_fixture(tmp_path)
+    write_config(dst, src_cfg)
+    assert dst.exists()
+    assert load_config(dst).tasks[0].id == "brief"
+
+
+def load_config_fixture(tmp_path):
+    tmp = tmp_path / "_src.yaml"
+    shutil.copy(FIXTURE, tmp)
+    return load_config(tmp)
