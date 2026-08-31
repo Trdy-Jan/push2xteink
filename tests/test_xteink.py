@@ -194,7 +194,7 @@ def test_push_file_401_on_signature_triggers_relogin(tmp_path):
     f.write_bytes(b"data")
     # cached "stale" token is still within max-age but the server rejects it (401);
     # push_file must force one relogin and retry with the fresh token.
-    respx.post(f"{API}/auth/login").mock(
+    login_route = respx.post(f"{API}/auth/login").mock(
         side_effect=[httpx.Response(200, json={"access_token": "fresh"})]
     )
     sig = respx.post(f"{API}/api/v1/upload/signature")
@@ -208,8 +208,22 @@ def test_push_file_401_on_signature_triggers_relogin(tmp_path):
     c._state.kv_set("xteink_token_obtained_at", str(time.time()))
     assert c.push_file(f, "a.txt") == "ok"
     assert sig.call_count == 2
-    # second signature call used the fresh token
+    assert login_route.call_count == 1  # exactly one relogin
+    # first attempt used the stale cache, retry used the fresh token
+    assert sig.calls[0].request.headers["authorization"] == "Bearer stale"
     assert sig.calls[-1].request.headers["authorization"] == "Bearer fresh"
+
+
+@respx.mock
+def test_push_file_signature_200_but_unsuccessful_raises(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"data")
+    respx.post(f"{API}/auth/login").mock(return_value=httpx.Response(200, json={"access_token": "t"}))
+    respx.post(f"{API}/api/v1/upload/signature").mock(
+        return_value=httpx.Response(200, json={"success": False, "message": "quota exceeded"})
+    )
+    with pytest.raises(XteinkUploadError, match="signature response incomplete"):
+        _client(tmp_path).push_file(f, "a.txt")
 
 
 @respx.mock

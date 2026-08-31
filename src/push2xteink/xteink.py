@@ -63,7 +63,7 @@ class XteinkClient:
     def _check_status(resp: httpx.Response, step: str) -> None:
         if resp.status_code == 401:
             raise _XteinkAuthError(f"{step} returned 401 unauthorized")
-        if resp.status_code >= 400:
+        if resp.status_code >= 300:
             raise XteinkUploadError(
                 f"{step} returned {resp.status_code}: {resp.text[:200]}"
             )
@@ -96,7 +96,12 @@ class XteinkClient:
         except httpx.HTTPError as exc:
             raise XteinkUploadError(f"signature request failed: {exc}") from exc
         self._check_status(resp, "signature")
-        return resp.json()
+        sig = resp.json()
+        if sig.get("success") is False or any(
+            k not in sig for k in ("host", "key", "policy", "signature", "access_key_id")
+        ):
+            raise XteinkUploadError(f"signature response incomplete: {sig!r}")
+        return sig
 
     def _upload_to_oss(self, sig: dict, content_type: str, data: bytes) -> None:
         files = {
