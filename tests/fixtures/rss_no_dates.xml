@@ -8,5 +8,8 @@
       <title>Dateless Item</title>
       <link>https://nd.example/only-post</link>
     </item>
+    <item>
+      <title>Anonymous Item With No Identifiers</title>
+    </item>
   </channel>
 </rss>

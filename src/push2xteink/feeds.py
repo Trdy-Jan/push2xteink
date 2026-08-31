@@ -46,7 +46,7 @@ def fetch_feed(
             resp = client.get(feed.url)
             resp.raise_for_status()
         raw = resp.content
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return FeedResult(error=f"fetch failed: {exc!s}")
 
     parsed = feedparser.parse(raw)

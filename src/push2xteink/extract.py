@@ -26,12 +26,15 @@ def extract_full_text(
             resp = client.get(url)
             resp.raise_for_status()
         html = resp.text
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL):
         return None
 
-    text = trafilatura.extract(
-        html, include_comments=False, include_tables=False, url=url or None
-    )
+    try:
+        text = trafilatura.extract(
+            html, include_comments=False, include_tables=False, url=url or None
+        )
+    except Exception:
+        return None
     if not text or len(text) < min_chars:
         return None
     paras = [escape(p.strip()) for p in text.split("\n") if p.strip()]

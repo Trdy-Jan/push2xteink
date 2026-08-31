@@ -2,7 +2,6 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import httpx
-import pytest
 import respx
 
 from push2xteink.feeds import FeedResult, fetch_feed, select_new_articles
@@ -48,10 +47,12 @@ def test_fetch_skips_entries_without_guid_or_link():
         return_value=httpx.Response(200, content=(FIX / "rss_no_dates.xml").read_bytes())
     )
     result = fetch_feed(Feed(id="nd", url="https://nd.example/rss"))
-    # item has a <link>, so guid falls back to link -> kept, published_at None
+    # one item has a <link> (guid falls back to link -> kept, published_at None);
+    # the other has no id/guid/link at all and must be dropped.
     assert len(result.articles) == 1
     assert result.articles[0].guid == result.articles[0].link
     assert result.articles[0].published_at is None
+    assert all(a.title != "Anonymous Item With No Identifiers" for a in result.articles)
 
 
 @respx.mock
@@ -59,7 +60,7 @@ def test_fetch_http_error_returns_error_result():
     respx.get("https://bad.example/rss").mock(return_value=httpx.Response(503))
     result = fetch_feed(Feed(id="bad", url="https://bad.example/rss"))
     assert result.articles == []
-    assert result.error is not None and "503" in result.error or "fetch failed" in result.error
+    assert result.error is not None and ("503" in result.error or "fetch failed" in result.error)
 
 
 @respx.mock
@@ -68,6 +69,13 @@ def test_fetch_connect_error_returns_error_result():
     result = fetch_feed(Feed(id="down", url="https://down.example/rss"))
     assert result.error is not None
     assert result.articles == []
+
+
+def test_fetch_malformed_url_returns_error_result():
+    result = fetch_feed(Feed(id="x", url="not a url"))
+    assert isinstance(result, FeedResult)
+    assert result.articles == []
+    assert result.error is not None
 
 
 NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)

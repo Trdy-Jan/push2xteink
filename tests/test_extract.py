@@ -39,6 +39,19 @@ def test_empty_url_returns_none():
 
 
 @respx.mock
+def test_trafilatura_raising_returns_none(monkeypatch):
+    respx.get("https://site.example/boom").mock(
+        return_value=httpx.Response(200, text="<html><body><article><p>x</p></article></body></html>")
+    )
+
+    def _boom(*a, **k):
+        raise RuntimeError("malformed html")
+
+    monkeypatch.setattr("push2xteink.extract.trafilatura.extract", _boom)
+    assert extract_full_text("https://site.example/boom") is None
+
+
+@respx.mock
 def test_escapes_html_in_extracted_text():
     html = "<html><body><article>" + "<p>Safe &amp; sound. " * 40 + "x < y and a > b</article></body></html>"
     respx.get("https://site.example/esc").mock(return_value=httpx.Response(200, text=html))
