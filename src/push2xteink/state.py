@@ -63,3 +63,47 @@ class State:
             (key, value, _iso(_utcnow())),
         )
         self._conn.commit()
+
+    # --- seen_items ---
+    def record_seen(
+        self, feed_id: str, guid: str, *, now: datetime | None = None
+    ) -> None:
+        ts = _iso(now or _utcnow())
+        self._conn.execute(
+            "INSERT OR IGNORE INTO seen_items(feed_id, item_guid, first_seen_at) "
+            "VALUES(?, ?, ?)",
+            (feed_id, guid, ts),
+        )
+        self._conn.commit()
+
+    def is_item_pushable(
+        self,
+        feed_id: str,
+        guid: str,
+        lookback_hours: int,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        now = now or _utcnow()
+        row = self._conn.execute(
+            "SELECT first_seen_at, pushed_at FROM seen_items "
+            "WHERE feed_id = ? AND item_guid = ?",
+            (feed_id, guid),
+        ).fetchone()
+        if row is None:
+            return True
+        if row["pushed_at"] is not None:
+            return False
+        first_seen = datetime.fromisoformat(row["first_seen_at"])
+        return first_seen >= now - timedelta(hours=lookback_hours)
+
+    def mark_pushed(
+        self, feed_id: str, guids: list[str], *, now: datetime | None = None
+    ) -> None:
+        ts = _iso(now or _utcnow())
+        self._conn.executemany(
+            "UPDATE seen_items SET pushed_at = ? "
+            "WHERE feed_id = ? AND item_guid = ?",
+            [(ts, feed_id, g) for g in guids],
+        )
+        self._conn.commit()

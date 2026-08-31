@@ -1,4 +1,10 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
 from push2xteink.state import State
+
+NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
 
 
 def test_creates_tables_idempotently(tmp_path):
@@ -16,4 +22,53 @@ def test_kv_roundtrip(tmp_path):
     assert s.kv_get("token") == "abc"
     s.kv_set("token", "def")
     assert s.kv_get("token") == "def"
+    s.close()
+
+
+def test_new_guid_is_pushable(tmp_path):
+    s = State(tmp_path / "s.db")
+    assert s.is_item_pushable("hn", "g1", 48, now=NOW) is True
+    s.close()
+
+
+def test_record_seen_is_idempotent(tmp_path):
+    s = State(tmp_path / "s.db")
+    s.record_seen("hn", "g1", now=NOW)
+    s.record_seen("hn", "g1", now=NOW + timedelta(hours=1))
+    row = s._conn.execute(
+        "SELECT first_seen_at FROM seen_items WHERE feed_id='hn' AND item_guid='g1'"
+    ).fetchone()
+    assert row["first_seen_at"] == NOW.isoformat()
+    s.close()
+
+
+def test_seen_unpushed_within_window_is_pushable(tmp_path):
+    s = State(tmp_path / "s.db")
+    s.record_seen("hn", "g1", now=NOW - timedelta(hours=10))
+    assert s.is_item_pushable("hn", "g1", 48, now=NOW) is True
+    s.close()
+
+
+def test_seen_unpushed_outside_window_not_pushable(tmp_path):
+    s = State(tmp_path / "s.db")
+    s.record_seen("hn", "g1", now=NOW - timedelta(hours=60))
+    assert s.is_item_pushable("hn", "g1", 48, now=NOW) is False
+    s.close()
+
+
+def test_pushed_item_not_pushable(tmp_path):
+    s = State(tmp_path / "s.db")
+    s.record_seen("hn", "g1", now=NOW - timedelta(hours=1))
+    s.mark_pushed("hn", ["g1"], now=NOW)
+    assert s.is_item_pushable("hn", "g1", 48, now=NOW + timedelta(hours=1)) is False
+    s.close()
+
+
+def test_mark_pushed_only_affects_listed_guids(tmp_path):
+    s = State(tmp_path / "s.db")
+    s.record_seen("hn", "g1", now=NOW)
+    s.record_seen("hn", "g2", now=NOW)
+    s.mark_pushed("hn", ["g1"], now=NOW)
+    assert s.is_item_pushable("hn", "g1", 48, now=NOW) is False
+    assert s.is_item_pushable("hn", "g2", 48, now=NOW) is True
     s.close()
