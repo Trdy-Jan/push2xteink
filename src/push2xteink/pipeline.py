@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +14,7 @@ from .feeds import fetch_feed, select_new_articles
 from .models import Article, Config, Feed, Task
 from .state import State
 from .summarize import SummarizeError, Summarizer
-from .xteink import XteinkClient
+from .xteink import XteinkClient, XteinkUploadError
 
 
 @dataclasses.dataclass
@@ -165,5 +167,67 @@ class Pipeline:
             return build_epub(title, articles, out_dir=out_dir)
         return build_txt(title, articles, out_dir=out_dir)
 
-    def run_task(self, task_id: str, *, now=None) -> RunOutcome:  # Task 5
-        raise NotImplementedError
+    # --- orchestration: spec §6 steps 0->7 ---
+    @staticmethod
+    def _join(warnings: list[str], extra: str | None) -> str | None:
+        parts = [w for w in warnings if w]
+        if extra:
+            parts.append(extra)
+        return "\n".join(parts) if parts else None
+
+    def run_task(self, task_id: str, *, now: datetime | None = None) -> RunOutcome:
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        try:
+            task = self._task(task_id)
+        except KeyError:
+            return RunOutcome(task_id, "failed", message=f"unknown task {task_id!r}")
+
+        run_id = self._state.start_run(task_id, now=now)
+        warnings: list[str] = []
+        if self._output_dir is not None:
+            work_dir = self._output_dir
+            work_dir.mkdir(parents=True, exist_ok=True)
+            own_dir = False
+        else:
+            work_dir = Path(tempfile.mkdtemp(prefix="p2x-"))
+            own_dir = True
+
+        try:
+            articles, kept_guids = self._gather(task, now=now, warnings=warnings)
+            if not articles:
+                msg = self._join(warnings, "no new items")
+                self._state.finish_run(
+                    run_id, status="skipped", item_count=0, message=msg, now=now
+                )
+                return RunOutcome(task_id, "skipped", 0, message=msg)
+
+            articles = self._prepare(task, articles, warnings=warnings)
+            path = self._build(task, articles, now=now, out_dir=work_dir)
+            record_id = self._xteink.push_file(path, path.name)
+
+            for feed_id, guids in kept_guids.items():
+                self._state.mark_pushed(feed_id, guids, now=now)
+
+            msg = self._join(warnings, None)
+            self._state.finish_run(
+                run_id, status="success", item_count=len(articles),
+                file_name=path.name, message=msg, now=now,
+            )
+            return RunOutcome(
+                task_id, "success", len(articles), file_name=path.name,
+                record_id=record_id, message=msg,
+            )
+        except (BuildError, XteinkUploadError) as exc:
+            msg = self._join(warnings, f"{type(exc).__name__}: {exc}")
+            self._state.finish_run(run_id, status="failed", message=msg, now=now)
+            return RunOutcome(task_id, "failed", message=msg)
+        except Exception as exc:  # noqa: BLE001 - never let a run crash the scheduler
+            msg = self._join(warnings, f"unexpected error: {exc!r}")
+            self._state.finish_run(run_id, status="failed", message=msg, now=now)
+            return RunOutcome(task_id, "failed", message=msg)
+        finally:
+            if own_dir:
+                shutil.rmtree(work_dir, ignore_errors=True)

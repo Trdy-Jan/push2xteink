@@ -222,3 +222,111 @@ def test_build_error_propagates(pipeline_config, tmp_path, monkeypatch):
     with pytest.raises(BuildError):
         p._build(pipeline_config.tasks[0], [_art("a", "a1")], now=NOW, out_dir=tmp_path)
     s.close()
+
+
+# --- Task 5: run_task ----------------------------------------------------
+
+import pytest  # noqa: E402
+
+from push2xteink.xteink import XteinkUploadError  # noqa: E402
+
+
+def _fetch_two(feed, **kw):
+    return FeedResult(articles=[_art(feed.id, f"{feed.id}1")])
+
+
+def _full_pipe(cfg, s, monkeypatch, *, xteink=None):
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", _fetch_two)
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text",
+                        lambda a, **kw: a.model_copy(update={"content_html": "<p>" + "x" * 400 + "</p>"}))
+    return Pipeline(cfg, s, summarizer=FakeSummarizer(), xteink_client=xteink or FakeXteink())
+
+
+def test_run_task_success_marks_pushed_and_writes_run(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    fx = FakeXteink()
+    p = _full_pipe(pipeline_config, s, monkeypatch, xteink=fx)
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "success" and out.item_count == 2 and out.record_id == "rec-1"
+    assert out.file_name == "早报_20260831.epub"
+    assert fx.pushed == [("早报_20260831.epub", "早报_20260831.epub")]
+    assert s.is_item_pushable("a", "a1", 48, now=NOW) is False  # marked pushed
+    assert s.task_has_successful_run("brief") is True
+    row = s.recent_runs(1)[0]
+    assert row["status"] == "success" and row["item_count"] == 2
+    s.close()
+
+
+def test_run_task_no_new_items_is_skipped(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", lambda feed, **kw: FeedResult(articles=[]))
+    p = Pipeline(pipeline_config, s, summarizer=FakeSummarizer(), xteink_client=FakeXteink())
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "skipped" and out.item_count == 0
+    assert s.recent_runs(1)[0]["status"] == "skipped"
+    s.close()
+
+
+def test_run_task_upload_failure_does_not_mark_pushed(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    class FailXteink:
+        def push_file(self, p, f): raise XteinkUploadError("500")
+        def close(self): pass
+    p = _full_pipe(pipeline_config, s, monkeypatch, xteink=FailXteink())
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "failed" and "XteinkUploadError" in out.message
+    assert s.is_item_pushable("a", "a1", 48, now=NOW) is True   # NOT marked -> retried later
+    assert s.recent_runs(1)[0]["status"] == "failed"
+    s.close()
+
+
+def test_run_task_build_failure_is_failed(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    p = _full_pipe(pipeline_config, s, monkeypatch)
+    monkeypatch.setattr("push2xteink.pipeline.build_epub",
+                        lambda *a, **k: (_ for _ in ()).throw(BuildError("too small")))
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "failed" and "BuildError" in out.message
+    s.close()
+
+
+def test_run_task_unexpected_error_is_caught(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    p = Pipeline(pipeline_config, s, summarizer=FakeSummarizer(), xteink_client=FakeXteink())
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "failed" and "unexpected" in out.message
+    assert s.recent_runs(1)[0]["status"] == "failed"
+    s.close()
+
+
+def test_run_task_unknown_task_no_run_row(pipeline_config, tmp_path):
+    s = State(tmp_path / "s.db")
+    p = Pipeline(pipeline_config, s, summarizer=None, xteink_client=FakeXteink())
+    out = p.run_task("ghost", now=NOW)
+    assert out.status == "failed" and "unknown task" in out.message
+    assert s.recent_runs(10) == []
+    s.close()
+
+
+def test_run_task_feed_warning_recorded_on_success(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    def fetch(feed, **kw):
+        return FeedResult(error="down") if feed.id == "b" else FeedResult(articles=[_art("a", "a1")])
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", fetch)
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text",
+                        lambda a, **kw: a.model_copy(update={"content_html": "<p>" + "x" * 400 + "</p>"}))
+    p = Pipeline(pipeline_config, s, summarizer=FakeSummarizer(), xteink_client=FakeXteink())
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "success" and out.item_count == 1
+    assert "feed b" in (s.recent_runs(1)[0]["message"] or "")
+    s.close()
+
+
+def test_run_task_naive_now_accepted(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    p = _full_pipe(pipeline_config, s, monkeypatch)
+    out = p.run_task("brief", now=datetime(2026, 8, 31, 12, 0))  # naive
+    assert out.status == "success"
+    s.close()
