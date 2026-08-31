@@ -30,11 +30,13 @@ def test_build_txt_no_summary_no_blank_summary_block(tmp_path):
     assert "标题0" in text and "第一段0" in text
 
 
-def test_build_txt_escapes_source_title(tmp_path):
+def test_build_txt_source_title_not_escaped(tmp_path):
+    # .txt is a plain-text file: source_title must appear verbatim, not HTML-escaped
     a = Article(feed_id="f", guid="g", title="标题", link="https://x/0",
-                source_title="Tom & Jerry <b>x", content_html="<p>正文</p>")
+                source_title="A & B", content_html="<p>正文</p>")
     text = build_txt("t", [a], out_dir=tmp_path).read_text(encoding="utf-8")
-    assert "Tom &amp; Jerry &lt;b&gt;x" in text
+    assert "A & B" in text
+    assert "A &amp; B" not in text
 
 
 def test_build_txt_creates_missing_out_dir(tmp_path):

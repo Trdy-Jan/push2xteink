@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from html import escape
 from pathlib import Path
 
 from ..models import Article
@@ -11,7 +10,7 @@ _SEP = "\n\n" + "-" * 40 + "\n\n"
 
 def _entry(article: Article) -> str:
     meta = " · ".join(
-        b for b in (escape(article.source_title or ""), article.link or "",
+        b for b in (article.source_title or "", article.link or "",
                     format_published(article.published_at)) if b
     )
     blocks = [f"# {article.title}", meta] if meta else [f"# {article.title}"]
