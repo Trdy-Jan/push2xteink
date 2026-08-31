@@ -62,7 +62,7 @@ def test_from_config_no_summarizer_when_ai_absent(pipeline_config, tmp_path):
 
 # --- Task 2: _gather ---------------------------------------------------------
 
-from datetime import datetime, timezone  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 
 from push2xteink.feeds import FeedResult  # noqa: E402
 from push2xteink.models import Article  # noqa: E402
@@ -125,6 +125,38 @@ def test_gather_dedups_across_runs(pipeline_config, tmp_path, monkeypatch):
     s.close()
 
 
+def test_gather_first_run_lookback_wired_into_select_new_articles(pipeline_config, tmp_path, monkeypatch):
+    # _art pins published_at=NOW, so this is the one test that proves _gather
+    # computes first_run and passes lookback_hours through to select_new_articles.
+    s = State(tmp_path / "s.db")
+    task = pipeline_config.tasks[1]  # "plain", feeds=["a"], first_run_lookback_hours=48 (default)
+
+    def fetch_old_and_recent(feed, **kw):
+        old = _art(feed.id, "old1").model_copy(update={"published_at": NOW - timedelta(hours=100)})
+        recent = _art(feed.id, "recent1").model_copy(update={"published_at": NOW - timedelta(hours=2)})
+        return FeedResult(articles=[old, recent])
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", fetch_old_and_recent)
+
+    p = _pipe(pipeline_config, s)
+    first, first_guids = p._gather(task, now=NOW, warnings=[])
+    assert [a.guid for a in first] == ["recent1"]          # old one dropped: first run + outside 48h
+    assert first_guids == {"a": ["recent1"]}
+
+    # a prior successful run flips first_run to False
+    rid = s.start_run(task.id, now=NOW)
+    s.finish_run(rid, status="success", now=NOW)
+
+    monkeypatch.setattr(
+        "push2xteink.pipeline.fetch_feed",
+        lambda feed, **kw: FeedResult(articles=[
+            _art(feed.id, "old2").model_copy(update={"published_at": NOW - timedelta(hours=100)})
+        ]),
+    )
+    second, _ = p._gather(task, now=NOW, warnings=[])
+    assert [a.guid for a in second] == ["old2"]            # kept now: first_run is False
+    s.close()
+
+
 # --- Task 3: _prepare ------------------------------------------------------
 
 
@@ -160,6 +192,17 @@ def test_prepare_no_summary_when_task_opts_out(pipeline_config, tmp_path, monkey
     p = Pipeline(pipeline_config, s, summarizer=FakeSummarizer(), xteink_client=FakeXteink())
     out = p._prepare(pipeline_config.tasks[1], [_art("a", "a1")], warnings=[])   # tasks[1].summarize=False
     assert out[0].summary is None
+    s.close()
+
+
+def test_prepare_warns_when_summarize_wanted_but_no_summarizer(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text", lambda a, **kw: a)
+    p = Pipeline(pipeline_config, s, summarizer=None, xteink_client=FakeXteink())
+    warnings = []
+    out = p._prepare(pipeline_config.tasks[0], [_art("a", "a1")], warnings=warnings)  # tasks[0].summarize=True
+    assert out[0].summary is None
+    assert any("no AI summarizer" in w for w in warnings)
     s.close()
 
 

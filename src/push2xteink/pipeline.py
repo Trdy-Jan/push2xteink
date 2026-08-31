@@ -135,14 +135,17 @@ class Pipeline:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             articles = list(pool.map(do_extract, articles))
 
-        if task.summarize and self._summarizer is not None:
-            for article in articles:
-                try:
-                    article.summary = self._summarizer.summarize(
-                        html_to_text(article.content_html)
-                    )
-                except SummarizeError as exc:
-                    warnings.append(f"summary failed for {article.link}: {exc}")
+        if task.summarize:
+            if self._summarizer is None:
+                warnings.append("summarize requested but no AI summarizer configured")
+            else:
+                for article in articles:
+                    try:
+                        article.summary = self._summarizer.summarize(
+                            html_to_text(article.content_html)
+                        )
+                    except SummarizeError as exc:
+                        warnings.append(f"summary failed for {article.link}: {exc}")
         return articles
 
     # --- step 5: build file ---
