@@ -271,3 +271,39 @@ def test_serve_hot_reloads_on_config_change(tmp_path, capsys, monkeypatch, _fake
     assert rc == 0
     inst = _fake_sched.instances[0]
     assert len(inst.reloads) == 1
+
+
+def test_serve_survives_reload_failure(tmp_path, capsys, monkeypatch, _fake_sched):
+    cfg = _cfg_file(tmp_path)
+
+    def boom(self, c):
+        raise RuntimeError("bad proxy.url")
+
+    monkeypatch.setattr(_fake_sched, "reload", boom)
+
+    calls = {"n": 0}
+
+    class OneShotStop:
+        def wait(self, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                import os
+                import time
+
+                text = cfg.read_text(encoding="utf-8")
+                cfg.write_text(text + "\n# touched\n", encoding="utf-8")
+                past = time.time() + 5
+                os.utime(cfg, (past, past))
+                return False
+            return True
+
+        def set(self):
+            pass
+
+    rc = main(
+        ["--config", str(cfg), "--db", str(tmp_path / "s.db"), "serve"],
+        _serve_stop=OneShotStop(),
+    )
+    assert rc == 0  # loop kept running, clean exit on stop
+    assert "reload failed" in capsys.readouterr().err
+    assert _fake_sched.instances[0].shut  # shutdown still ran
