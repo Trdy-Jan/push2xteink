@@ -46,3 +46,49 @@ def test_invalid_format_rejected(valid_config_dict):
     valid_config_dict["tasks"][0]["format"] = "pdf"
     with pytest.raises(ValidationError):
         Config.model_validate(valid_config_dict)
+
+
+def test_duplicate_feed_id_rejected(valid_config_dict):
+    valid_config_dict["feeds"].append(
+        {"id": "hn", "url": "https://other.example/rss"}
+    )
+    with pytest.raises(ValidationError, match="duplicate feed id"):
+        Config.model_validate(valid_config_dict)
+
+
+def test_duplicate_task_id_rejected(valid_config_dict):
+    valid_config_dict["tasks"].append(
+        {
+            "id": "brief",
+            "name": "夜报",
+            "feeds": ["hn"],
+            "schedule": "0 22 * * *",
+        }
+    )
+    with pytest.raises(ValidationError, match="duplicate task id"):
+        Config.model_validate(valid_config_dict)
+
+
+def test_task_unknown_feed_rejected(valid_config_dict):
+    valid_config_dict["tasks"][0]["feeds"] = ["hn", "ghost"]
+    with pytest.raises(ValidationError, match="unknown feed"):
+        Config.model_validate(valid_config_dict)
+
+
+def test_task_empty_feeds_rejected(valid_config_dict):
+    valid_config_dict["tasks"][0]["feeds"] = []
+    with pytest.raises(ValidationError, match="no feeds"):
+        Config.model_validate(valid_config_dict)
+
+
+def test_invalid_cron_rejected(valid_config_dict):
+    valid_config_dict["tasks"][0]["schedule"] = "not a cron"
+    with pytest.raises(ValidationError, match="invalid cron"):
+        Config.model_validate(valid_config_dict)
+
+
+def test_summarize_without_ai_rejected(valid_config_dict):
+    valid_config_dict.pop("ai")
+    # tasks[0].summarize 仍为 True
+    with pytest.raises(ValidationError, match="summarize=true"):
+        Config.model_validate(valid_config_dict)
