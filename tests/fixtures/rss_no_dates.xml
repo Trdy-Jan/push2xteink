@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>No Dates</title>
+    <link>https://nd.example/</link>
+    <description>Feed whose item lacks guid and pubDate</description>
+    <item>
+      <title>Dateless Item</title>
+      <link>https://nd.example/only-post</link>
+    </item>
+    <item>
+      <title>Anonymous Item With No Identifiers</title>
+    </item>
+  </channel>
+</rss>
