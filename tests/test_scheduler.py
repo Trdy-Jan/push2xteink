@@ -87,3 +87,43 @@ def test_run_now_survives_unexpected_pipeline_error(tmp_path):
     assert out.status == "failed"
     assert s.active_count == 0     # finally still ran
     st.close()
+
+
+def test_start_registers_and_starts(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, _ = _sched(_config(), st)
+    s.start()
+    try:
+        assert s._aps.running
+        assert {j.id for j in s._aps.get_jobs()} == {"t1"}
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_shutdown_closes_pipeline_and_is_idempotent(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, fp = _sched(_config(), st)
+    s.start()
+    s.shutdown()
+    assert fp.closed is True
+    s.shutdown()  # no raise
+    st.close()
+
+
+def test_shutdown_drains_run_now_in_flight(tmp_path):
+    import time
+    st = State(tmp_path / "s.db")
+    fp = FakePipeline(); fp.block = threading.Event()
+    s, _ = _sched(_config(), st, fp)
+    s.start()
+    t = threading.Thread(target=s.run_now, args=("t1",)); t.start()
+    for _ in range(200):
+        if fp.calls: break
+        time.sleep(0.01)
+    # release shortly after shutdown() begins waiting
+    threading.Timer(0.3, fp.block.set).start()
+    s.shutdown()                       # must block until the run finishes
+    assert s.active_count == 0 and fp.closed is True
+    t.join(timeout=5)
+    st.close()

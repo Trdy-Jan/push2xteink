@@ -88,11 +88,25 @@ class Scheduler:
         with self._cond:
             return len(self._active_ids)
 
-    def start(self) -> None:  # Task 2
-        raise NotImplementedError
+    def start(self) -> None:
+        self._register_jobs()
+        self._aps.start()
 
-    def shutdown(self, *, wait: bool = True) -> None:  # Task 2
-        raise NotImplementedError
+    def _drain(self, timeout: float) -> bool:
+        with self._cond:
+            drained = self._cond.wait_for(lambda: not self._active_ids, timeout=timeout)
+        if not drained:
+            logger.warning("drain timed out with %d active run(s)", self.active_count)
+        return drained
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
+        if self._aps.running:
+            self._aps.shutdown(wait=wait)
+        self._drain(self._drain_timeout)
+        self._pipeline.close()
 
     def reload(self, new_config: Config) -> None:  # Task 3
         raise NotImplementedError
