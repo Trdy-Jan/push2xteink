@@ -101,3 +101,28 @@ def test_transient_then_success_within_retries():
     route.side_effect = [httpx.Response(503), _chat_ok("ok")]
     assert Summarizer(_cfg(max_retries=2)).summarize("body") == "ok"
     assert route.call_count == 2
+
+
+@respx.mock
+def test_qps_throttles_sequential_calls(monkeypatch):
+    respx.post("https://api.primary/v1/chat/completions").mock(return_value=_chat_ok("x"))
+    sleeps: list[float] = []
+    monkeypatch.setattr("push2xteink.summarize.time.sleep", lambda s: sleeps.append(s))
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr("push2xteink.summarize.time.monotonic", lambda: clock["t"])
+
+    s = Summarizer(_cfg(qps=2.0))  # min interval 0.5s
+    s.summarize("a")               # first call: no wait
+    s.summarize("b")               # second call at same clock -> must request 0.5s sleep
+    assert sleeps and abs(sleeps[0] - 0.5) < 1e-6
+
+
+@respx.mock
+def test_first_call_not_throttled(monkeypatch):
+    respx.post("https://api.primary/v1/chat/completions").mock(return_value=_chat_ok("x"))
+    sleeps: list[float] = []
+    monkeypatch.setattr("push2xteink.summarize.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr("push2xteink.summarize.time.monotonic", lambda: 1000.0)
+    Summarizer(_cfg(qps=1.0)).summarize("a")
+    assert sleeps == []
