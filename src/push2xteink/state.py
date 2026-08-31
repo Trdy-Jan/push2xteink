@@ -159,6 +159,17 @@ class State:
             ).fetchone()
             return row is not None
 
+    def has_success_on_day(self, task_id: str, day: str) -> bool:
+        """day is 'YYYY-MM-DD' (UTC). True if this task has a status='success'
+        run started that day."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM runs WHERE task_id = ? AND status = 'success' "
+                "AND started_at >= ? AND started_at < ? LIMIT 1",
+                (task_id, f"{day}T00:00:00+00:00", f"{day}T99"),
+            ).fetchone()
+        return row is not None
+
     def recent_runs(self, limit: int = 50) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(

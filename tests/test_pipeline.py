@@ -402,6 +402,46 @@ def test_run_task_finish_run_failure_on_success_does_not_propagate(pipeline_conf
     s.close()
 
 
+def test_run_task_normalizes_tzaware_non_utc_now(pipeline_config, tmp_path, monkeypatch):
+    # 2026-09-01 02:00 +08:00 == 2026-08-31 18:00 UTC -> file must use 20260831
+    s = State(tmp_path / "s.db")
+    fx = FakeXteink()
+    p = _full_pipe(pipeline_config, s, monkeypatch, xteink=fx)
+    tz8 = timezone(timedelta(hours=8))
+    out = p.run_task("brief", now=datetime(2026, 9, 1, 2, 0, tzinfo=tz8))
+    assert out.status == "success"
+    assert "20260831" in out.file_name and "20260901" not in out.file_name
+
+
+def test_run_task_failed_run_records_item_count_and_file_name(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    class FailXteink:
+        def push_file(self, p, f): raise XteinkUploadError("500")
+        def close(self): pass
+    p = _full_pipe(pipeline_config, s, monkeypatch, xteink=FailXteink())
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "failed"
+    row = s.recent_runs(1)[0]
+    assert row["item_count"] == 2
+    assert row["file_name"] == "早报_20260831.epub"
+    s.close()
+
+
+def test_run_task_partial_gather_failure_leaves_earlier_feed_retryable(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    def fetch(feed, **kw):
+        if feed.id == "b":
+            raise RuntimeError("feed b exploded")
+        return FeedResult(articles=[_art("a", "a1")])
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", fetch)
+    p = Pipeline(pipeline_config, s, summarizer=FakeSummarizer(), xteink_client=FakeXteink())
+    out = p.run_task("brief", now=NOW)
+    assert out.status == "failed"
+    # a1 was recorded seen but never marked pushed -> retried next window
+    assert s.is_item_pushable("a", "a1", 48, now=NOW) is True
+    s.close()
+
+
 def test_run_task_finish_run_failure_on_failure_path_does_not_propagate(pipeline_config, tmp_path, monkeypatch):
     s = State(tmp_path / "s.db")
     class FailXteink:

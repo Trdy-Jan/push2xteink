@@ -7,8 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .builders import build_epub, build_txt, html_to_text
-from .builders.common import BuildError
+from .builders import BuildError, build_epub, build_txt, html_to_text
 from .extract import apply_full_text
 from .feeds import fetch_feed, select_new_articles
 from .models import Article, Config, Feed, Task
@@ -37,6 +36,9 @@ class Pipeline:
         xteink_client: XteinkClient,
         output_dir: str | Path | None = None,
     ) -> None:
+        # With ``output_dir`` set the caller owns that directory's lifecycle
+        # (Pipeline never deletes it) and must not run the same task concurrently
+        # into it -- two runs would race on the built file name.
         self._config = config
         self._state = state
         self._summarizer = summarizer
@@ -141,6 +143,9 @@ class Pipeline:
             else:
                 for article in articles:
                     try:
+                        # In-place mutation is deliberate and safe: a fresh
+                        # Article is fetched per run, nothing else aliases it,
+                        # and Article is not frozen / no validate_assignment.
                         article.summary = self._summarizer.summarize(
                             html_to_text(article.content_html)
                         )
@@ -150,15 +155,7 @@ class Pipeline:
 
     # --- step 5: build file ---
     def _same_day_success(self, task_id: str, now: datetime) -> bool:
-        day = now.strftime("%Y-%m-%d")
-        for row in self._state.recent_runs(200):
-            if (
-                row["task_id"] == task_id
-                and row["status"] == "success"
-                and str(row["started_at"]).startswith(day)
-            ):
-                return True
-        return False
+        return self._state.has_success_on_day(task_id, now.strftime("%Y-%m-%d"))
 
     def _build(
         self, task: Task, articles: list[Article], *, now: datetime, out_dir: Path
@@ -185,9 +182,14 @@ class Pipeline:
             pass
 
     def run_task(self, task_id: str, *, now: datetime | None = None) -> RunOutcome:
+        """Run one task end to end. Never raises: every failure is captured in
+        the returned RunOutcome (and, best-effort, the runs row). With
+        ``output_dir`` set the caller owns cleanup and must not run the same
+        task concurrently into that directory."""
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)  # store/compare dates in UTC
 
         try:
             task = self._task(task_id)
@@ -213,6 +215,8 @@ class Pipeline:
             self._finish(run_id, status="failed", message=msg, now=now)
             return RunOutcome(task_id, "failed", message=msg)
 
+        articles: list[Article] = []
+        built_name: str | None = None
         try:
             articles, kept_guids = self._gather(task, now=now, warnings=warnings)
             if not articles:
@@ -224,6 +228,7 @@ class Pipeline:
 
             articles = self._prepare(task, articles, warnings=warnings)
             path = self._build(task, articles, now=now, out_dir=work_dir)
+            built_name = path.name
             record_id = self._xteink.push_file(path, path.name)
 
             # A post-upload DB failure below leaves guids un-marked, so the same
@@ -242,11 +247,13 @@ class Pipeline:
             )
         except (BuildError, XteinkUploadError) as exc:
             msg = self._join(warnings, f"{type(exc).__name__}: {exc}")
-            self._finish(run_id, status="failed", message=msg, now=now)
+            self._finish(run_id, status="failed", item_count=len(articles) or None,
+                         file_name=built_name, message=msg, now=now)
             return RunOutcome(task_id, "failed", message=msg)
         except Exception as exc:  # noqa: BLE001 - never let a run crash the scheduler
             msg = self._join(warnings, f"unexpected error: {exc!r}")
-            self._finish(run_id, status="failed", message=msg, now=now)
+            self._finish(run_id, status="failed", item_count=len(articles) or None,
+                         file_name=built_name, message=msg, now=now)
             return RunOutcome(task_id, "failed", message=msg)
         finally:
             if own_dir:

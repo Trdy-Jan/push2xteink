@@ -153,6 +153,29 @@ def test_naive_datetimes_are_normalized_to_utc(tmp_path):
     s.close()
 
 
+def test_has_success_on_day(tmp_path):
+    s = State(tmp_path / "s.db")
+    rid = s.start_run("brief", now=NOW)  # 2026-08-31
+    s.finish_run(rid, status="success", now=NOW)
+
+    assert s.has_success_on_day("brief", "2026-08-31") is True
+    assert s.has_success_on_day("brief", "2026-08-30") is False  # other day
+    assert s.has_success_on_day("plain", "2026-08-31") is False  # other task
+
+    # non-success status does not count
+    r2 = s.start_run("other", now=NOW)
+    s.finish_run(r2, status="failed", now=NOW)
+    assert s.has_success_on_day("other", "2026-08-31") is False
+
+    # late-evening success still lands on the right UTC day (upper-bound check)
+    late = datetime(2026, 8, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    r3 = s.start_run("late", now=late)
+    s.finish_run(r3, status="success", now=late)
+    assert s.has_success_on_day("late", "2026-08-31") is True
+    assert s.has_success_on_day("late", "2026-09-01") is False
+    s.close()
+
+
 def test_finish_run_rejects_unknown_status(tmp_path):
     s = State(tmp_path / "s.db")
     rid = s.start_run("brief", now=NOW)
