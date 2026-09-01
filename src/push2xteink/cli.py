@@ -14,6 +14,60 @@ from .pipeline import Pipeline
 from .state import State
 
 
+# Spec §10: a first `docker compose up` with no config.yaml must leave the user
+# a filled-in-able template, not a crashloop on "config file not found".
+# Mirrors the spec §4 example. Deliberately NOT loadable as-is: the placeholders
+# have to be replaced, and `serve` exits 2 until they are.
+_SAMPLE_CONFIG = """\
+# push2xteink 配置文件
+# 修改后保存即可热更新（无需重启容器）；Web 界面读写的也是这个文件。
+
+xteink:
+  api_base: https://api-prod.xteink.cn
+  username: "<手机号>"           # 必填
+  password: "<密码>"             # 必填
+
+proxy:
+  # 留空表示不走代理；支持 http:// https:// socks5://
+  url:
+
+# AI 摘要（可选）。不需要摘要就整段删掉，并把 tasks[].summarize 设为 false。
+# ai:
+#   use_proxy: false             # AI 请求是否走上面的 proxy.url
+#   primary:
+#     base_url: https://api.example.com/v1
+#     api_key: "<key>"
+#     model: gpt-4o-mini
+#   fallback:                    # 可选；primary 失败时启用
+#     base_url: https://api.backup.com/v1
+#     api_key: "<key>"
+#     model: claude-3-5-haiku
+#   timeout_seconds: 60
+#   max_retries: 2
+#   qps: 1
+
+fetch:
+  timeout_seconds: 20
+  concurrency: 5
+
+feeds:
+  - id: hn
+    url: https://news.ycombinator.com/rss
+    full_text: true              # 默认 true；抓全文失败时回退到 RSS 内容
+    use_proxy: false
+
+tasks:
+  - id: morning-brief
+    name: 早报
+    feeds: [hn]
+    schedule: "0 7 * * *"        # 标准 5 段 cron，按容器时区（TZ）解释
+    summarize: false             # 需要 AI 摘要时改 true，并填好上面的 ai 段
+    format: epub                 # epub | txt
+    enabled: true
+    first_run_lookback_hours: 48 # 仅任务从未成功执行过时生效
+"""
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="push2xteink")
     p.add_argument("--config", default=os.environ.get("CONFIG_PATH", "data/config.yaml"))
@@ -34,6 +88,21 @@ def _serve(config_path: Path, db_path: Path, *, _run=None) -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # Only `serve` bootstraps — it's the container entrypoint. `list` / `run`
+    # keep the plain "not found" error.
+    if not config_path.exists():
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+        except OSError as exc:
+            print(f"cannot create config file {config_path}: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"wrote a sample config to {config_path} — fill it in and restart",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         load_config(config_path)  # fail-fast; the app's lifespan loads it again

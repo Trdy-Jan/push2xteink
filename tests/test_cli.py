@@ -178,3 +178,66 @@ def test_serve_bad_config_returns_2(tmp_path, capsys):
     assert rc == 2
     assert capsys.readouterr().err
     assert not run.calls  # never handed off to uvicorn
+
+
+# --------------------------------------------------------------------------- #
+# first-run bootstrap (spec §10) — a fresh `docker compose up` must not
+# crashloop on "config file not found"
+# --------------------------------------------------------------------------- #
+
+
+def test_serve_missing_config_writes_sample_and_exits_2(tmp_path, capsys):
+    cfg = tmp_path / "fresh" / "config.yaml"
+    run = _RunRecorder()
+    rc = main(["--config", str(cfg), "--db", str(tmp_path / "s.db"), "serve"], _run=run)
+    assert rc == 2
+    assert cfg.exists()                       # parent dir created too
+    err = capsys.readouterr().err
+    assert "sample config" in err and str(cfg) in err
+    assert not run.calls                      # never handed off to uvicorn
+
+
+def test_bare_main_missing_config_writes_sample(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    monkeypatch.setenv("CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "s.db"))
+    run = _RunRecorder()
+    assert main([], _run=run) == 2
+    assert cfg.exists()
+    assert not run.calls
+
+
+def test_sample_config_is_valid_yaml_and_loads_once_filled(tmp_path):
+    from ruamel.yaml import YAML
+
+    from push2xteink.cli import _SAMPLE_CONFIG
+    from push2xteink.config import load_config
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+    data = YAML().load(cfg.read_text(encoding="utf-8"))
+    assert data is not None                   # parses as YAML as written
+
+    filled = _SAMPLE_CONFIG.replace("<手机号>", "15800000000").replace("<密码>", "pw")
+    cfg.write_text(filled, encoding="utf-8")
+    loaded = load_config(cfg)                 # ...and validates once filled in
+    assert loaded.xteink.username == "15800000000"
+    assert [f.id for f in loaded.feeds] == ["hn"]
+    assert loaded.tasks[0].id == "morning-brief"
+    assert loaded.tasks[0].summarize is False and loaded.ai is None
+    assert loaded.proxy.url is None
+
+
+def test_serve_does_not_overwrite_an_existing_config(tmp_path):
+    cfg = _cfg_file(tmp_path)
+    before = cfg.read_text(encoding="utf-8")
+    run = _RunRecorder()
+    assert main(["--config", str(cfg), "--db", str(tmp_path / "s.db"), "serve"], _run=run) == 0
+    assert cfg.read_text(encoding="utf-8") == before
+
+
+def test_list_missing_config_still_errors_without_bootstrapping(tmp_path, capsys):
+    cfg = tmp_path / "nope.yaml"
+    assert main(["--config", str(cfg), "--db", str(tmp_path / "s.db"), "list"]) == 2
+    assert not cfg.exists()
+    assert "not found" in capsys.readouterr().err
