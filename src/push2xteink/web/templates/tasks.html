@@ -2,19 +2,9 @@
 {% block title %}任务 - push2xteink{% endblock %}
 {% block content %}
 <h1>推送任务</h1>
-<table id="task-table">
-  <thead>
-    <tr><th>名称</th><th>计划</th><th>下次执行</th><th>启用</th></tr>
-  </thead>
-  <tbody>
-    {% for t in tasks %}
-    <tr>
-      <td>{{ t.name }}</td>
-      <td><code>{{ t.schedule }}</code></td>
-      <td>{{ t.next_run_time.isoformat() if t.next_run_time else "-" }}</td>
-      <td>{{ "是" if t.enabled else "否" }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="toolbar">
+  <button hx-get="/tasks/new" hx-target="#task-form" hx-swap="innerHTML">新建任务</button>
+</div>
+<div id="task-form"></div>
+{% include "_task_table.html" %}
 {% endblock %}

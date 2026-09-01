@@ -18,10 +18,18 @@
     th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #ddd; }
     .badge { display: inline-block; padding: .1rem .5rem; border-radius: .6rem;
              font-size: .8rem; background: #e5e5e5; }
-    .badge-success { background: #d5f2dd; }
-    .badge-failed { background: #f7d4d4; }
-    .badge-skipped { background: #e5e5e5; }
+    .badge-success { background: #d5f2dd; color: #14532d; }
+    .badge-failed { background: #f7d4d4; color: #7f1d1d; }
+    .badge-skipped { background: #e5e5e5; color: #444; }
+    .badge-running { background: #d5e4f7; color: #1e3a8a; }
     button { font: inherit; cursor: pointer; }
+    fieldset { margin: .75rem 0; border: 1px solid #ddd; border-radius: .3rem; }
+    label { display: block; margin: .35rem 0; }
+    input, select, textarea { font: inherit; }
+    .error { color: #7f1d1d; background: #f7d4d4; padding: .4rem .6rem; border-radius: .3rem; }
+    .ok { color: #14532d; background: #d5f2dd; padding: .4rem .6rem; border-radius: .3rem; }
+    .hint { color: #1e3a8a; margin-left: .4rem; font-size: .85rem; }
+    .toolbar { margin: .75rem 0; }
   </style>
 </head>
 <body>

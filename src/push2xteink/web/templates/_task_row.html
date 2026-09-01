@@ -1,0 +1,23 @@
+<tr id="task-row-{{ t.id }}">
+  <td>{{ t.name }}</td>
+  <td>{{ t.next_run_time or "-" }}</td>
+  <td>
+    <span class="badge {{ t.badge_class }}">{{ t.badge_text }}</span>
+    {% if triggered|default(false) %}<span class="hint">已触发</span>{% endif %}
+  </td>
+  <td>
+    <button hx-post="/tasks/{{ t.id }}/toggle"
+            hx-target="#task-row-{{ t.id }}" hx-swap="outerHTML">
+      {{ "是" if t.enabled else "否" }}
+    </button>
+  </td>
+  <td>
+    <button hx-post="/tasks/{{ t.id }}/run"
+            hx-target="#task-row-{{ t.id }}" hx-swap="outerHTML">立即执行</button>
+    <button hx-get="/tasks/{{ t.id }}/edit"
+            hx-target="#task-form" hx-swap="innerHTML">编辑</button>
+    <button hx-delete="/tasks/{{ t.id }}"
+            hx-target="#task-row-{{ t.id }}" hx-swap="outerHTML"
+            hx-confirm="删除任务 {{ t.name }}？">删除</button>
+  </td>
+</tr>
