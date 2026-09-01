@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -19,6 +19,8 @@ from .state import State
 logger = logging.getLogger(__name__)
 
 _EXECUTOR_WORKERS = 4
+_SEEN_RETENTION_DAYS = 90
+_PRUNE_JOB_ID = "__prune__"
 
 
 def _default_scheduler() -> BackgroundScheduler:
@@ -158,6 +160,24 @@ class Scheduler:
         return True
 
     # --- jobs ---
+    def _prune(self) -> None:
+        try:
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(days=_SEEN_RETENTION_DAYS)
+            ).isoformat()
+            n = self._state.prune_seen_items(cutoff)
+            logger.info("pruned %d old seen_items rows", n)
+        except Exception:  # noqa: BLE001 - a sqlite error must not kill the worker
+            logger.exception("prune_seen_items failed")
+
+    def _ensure_prune_job(self) -> None:
+        self._aps.add_job(
+            self._prune,
+            CronTrigger(hour=3, minute=17),
+            id=_PRUNE_JOB_ID,
+            replace_existing=True,
+        )
+
     def _register_jobs(self) -> None:
         self._aps.remove_all_jobs()
         for task in self._config.tasks:
@@ -170,6 +190,8 @@ class Scheduler:
                 id=task.id,
                 replace_existing=True,
             )
+        # remove_all_jobs() above wipes __prune__ too; re-add so reload() keeps it.
+        self._ensure_prune_job()
 
     @property
     def enabled_task_ids(self) -> list[str]:

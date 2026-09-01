@@ -79,7 +79,7 @@ def test_register_jobs_only_enabled(tmp_path):
     st = State(tmp_path / "s.db")
     s, _ = _sched(_config(), st)
     s._register_jobs()
-    job_ids = {j.id for j in s._aps.get_jobs()}
+    job_ids = {j.id for j in s._aps.get_jobs()} - {"__prune__"}
     assert job_ids == {"t1"}
     st.close()
 
@@ -119,7 +119,7 @@ def test_start_registers_and_starts(tmp_path):
     s.start()
     try:
         assert s._aps.running
-        assert {j.id for j in s._aps.get_jobs()} == {"t1"}
+        assert {j.id for j in s._aps.get_jobs()} - {"__prune__"} == {"t1"}
     finally:
         s.shutdown()
     st.close()
@@ -168,7 +168,7 @@ def test_reload_swaps_config_and_jobs(tmp_path):
         ])
         s.reload(new)
         assert s.enabled_task_ids == ["t3"]
-        assert {j.id for j in s._aps.get_jobs()} == {"t3"}
+        assert {j.id for j in s._aps.get_jobs()} - {"__prune__"} == {"t3"}
         assert pipelines[0].closed is True      # old pipeline closed
         assert pipelines[1].closed is False     # new one live
     finally:
@@ -295,7 +295,7 @@ def test_reload_aborts_and_stays_running_when_factory_raises(tmp_path):
         ]))  # must NOT raise
         assert s._aps.state == STATE_RUNNING       # resumed, not left PAUSED
         assert made[0].closed is False             # old pipeline still live
-        assert {j.id for j in s._aps.get_jobs()} == {"t1"}   # jobs unchanged
+        assert {j.id for j in s._aps.get_jobs()} - {"__prune__"} == {"t1"}   # jobs unchanged
         assert [t.id for t in s.config.tasks] == ["t1", "t2"]  # config unchanged
         assert s.run_now("t1").status == "success"  # still functional
     finally:
@@ -541,4 +541,31 @@ def test_next_run_time_accessor(tmp_path):
         assert s.next_run_time("ghost") is None              # unknown
     finally:
         s.shutdown()
+    st.close()
+
+
+def test_prune_job_registered_and_survives_reload(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, _ = _sched(_config(), st)
+    s.start()
+    try:
+        assert "__prune__" in {j.id for j in s._aps.get_jobs()}
+        s.reload(_config())
+        assert "__prune__" in {j.id for j in s._aps.get_jobs()}
+        assert "__prune__" not in s.enabled_task_ids
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_prune_calls_state_and_swallows_errors(tmp_path, monkeypatch):
+    st = State(tmp_path / "s.db")
+    calls = []
+    monkeypatch.setattr(st, "prune_seen_items", lambda before: calls.append(before) or 0)
+    s, _ = _sched(_config(), st)
+    s._prune()
+    assert len(calls) == 1
+    # error path
+    monkeypatch.setattr(st, "prune_seen_items", lambda before: (_ for _ in ()).throw(RuntimeError("x")))
+    s._prune()   # must not raise
     st.close()
