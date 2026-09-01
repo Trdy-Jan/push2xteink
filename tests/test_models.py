@@ -3,7 +3,27 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from push2xteink.models import Article, Config, DEFAULT_PROMPT
+from push2xteink.models import Article, Config, DEFAULT_PROMPT, ProxyConfig
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:7890", "socks5://h:1", "https://p:8080", None])
+def test_proxy_url_valid_schemes(url):
+    assert ProxyConfig(url=url).url == url
+
+
+@pytest.mark.parametrize("url", ["127.0.0.1:7890", "ftp://x", "just-a-host", ""])
+def test_proxy_url_bad_scheme_rejected(url):
+    with pytest.raises(ValidationError, match="proxy url"):
+        ProxyConfig(url=url)
+
+
+def test_task_name_length_bounds(valid_config_dict):
+    valid_config_dict["tasks"][0]["name"] = "x" * 61
+    with pytest.raises(ValidationError, match="at most 60"):
+        Config.model_validate(valid_config_dict)
+    valid_config_dict["tasks"][0]["name"] = ""
+    with pytest.raises(ValidationError):
+        Config.model_validate(valid_config_dict)
 
 
 def test_valid_config_parses(valid_config_dict):
