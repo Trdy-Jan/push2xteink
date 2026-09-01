@@ -57,20 +57,29 @@ def apply_config_change(
     """
     sched = get_scheduler(request)
     path = get_config_path(request)
-    raw = load_config(path).model_dump(mode="json")
-    mutate(raw)
-    try:
-        new_config = Config.model_validate(raw)
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=_first_error(exc)) from exc
-    write_config(path, new_config)
-    if not sched.reload(new_config):
-        # Config is valid and now on disk, but the scheduler could not build a
-        # pipeline for it. Leave the token unadvanced so the ConfigWatcher keeps
-        # retrying, and surface the failure instead of a false 200.
-        raise HTTPException(
-            status_code=500,
-            detail="config saved but scheduler reload failed — check server logs",
-        )
-    sched.prime_config_token(path)  # so the ConfigWatcher doesn't reload again
-    return new_config
+    # Held across read-modify-write-reload: concurrent handlers run on anyio's
+    # threadpool with no serialization otherwise, which loses updates and can
+    # leave the live config permanently out of sync with the file on disk.
+    with request.app.state.config_lock:
+        raw = load_config(path).model_dump(mode="json")
+        mutate(raw)
+        try:
+            new_config = Config.model_validate(raw)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=_first_error(exc)) from exc
+        write_config(path, new_config)
+        # Prime BEFORE reload: the file content is already final here, and
+        # reload() can block for the whole drain timeout — long enough for the
+        # ConfigWatcher to tick, see a changed token and queue a second,
+        # identical reload.
+        sched.prime_config_token(path)
+        if not sched.reload(new_config):
+            # Config is valid and now on disk, but the scheduler could not build
+            # a pipeline for it. Drop the token so the ConfigWatcher retries the
+            # on-disk config, and surface the failure instead of a false 200.
+            sched.invalidate_config_token()
+            raise HTTPException(
+                status_code=500,
+                detail="config saved but scheduler reload failed — check server logs",
+            )
+        return new_config

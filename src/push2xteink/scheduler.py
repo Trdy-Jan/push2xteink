@@ -57,6 +57,19 @@ class Scheduler:
     # --- job body ---
     def _run(self, task_id: str) -> RunOutcome | None:
         with self._cond:
+            if self._shutdown:
+                return RunOutcome(
+                    task_id, "failed", 0, None, None, "scheduler is shut down"
+                )
+            if task_id in self._active_ids:
+                # Spec §9: a task never runs concurrently with itself.
+                # APScheduler's max_instances=1 only covers repeats of the SAME
+                # job id, so a cron fire of `t1` and the `manual:t1` job from
+                # submit() would otherwise both execute.
+                logger.info("skipping %s: already running", task_id)
+                return RunOutcome(
+                    task_id, "skipped", 0, None, None, "task already running"
+                )
             self._active_ids.append(task_id)
             # Capture the pipeline reference atomically with registration so a
             # concurrent reload() either waits for this run in its drain (we
@@ -73,20 +86,8 @@ class Scheduler:
                 self._cond.notify_all()
 
     def run_now(self, task_id: str) -> RunOutcome:
-        with self._cond:
-            if self._shutdown:
-                return RunOutcome(
-                    task_id, "failed", 0, None, None, "scheduler is shut down"
-                )
-            if task_id in self._active_ids:
-                # Honours the spec §9 non-concurrency invariant that APScheduler's
-                # max_instances=1 gives cron fires. Not perfectly atomic with
-                # _run's own append, but the window is a few bytecodes under the
-                # GIL and a cron fire landing in it at 1-min granularity is
-                # astronomically unlikely.
-                return RunOutcome(
-                    task_id, "skipped", 0, None, None, "task already running"
-                )
+        # The shutdown/already-running guards live in _run so that EVERY dispatch
+        # path (cron fire, submit(), run_now) shares them atomically.
         outcome = self._run(task_id)
         if outcome is None:
             return RunOutcome(task_id, "failed", 0, None, None, "scheduler internal error")
@@ -96,8 +97,12 @@ class Scheduler:
         """Dispatch a one-off manual run of ``task_id`` via the executor.
 
         The cron job (if any) for the same task is untouched; the manual job
-        uses a distinct ``manual:`` id.
+        uses a distinct ``manual:`` id. Non-concurrency is enforced in ``_run``.
         """
+        with self._cond:
+            if self._shutdown:
+                logger.info("submit(%s) ignored: scheduler is shut down", task_id)
+                return
         self._aps.add_job(
             self._run,
             DateTrigger(run_date=datetime.now(timezone.utc)),
@@ -119,6 +124,11 @@ class Scheduler:
         """Record the current config file token so a following unchanged
         ``maybe_reload`` is a no-op. Called by serve/lifespan after ``start()``."""
         self._config_token = self._token(path)
+
+    def invalidate_config_token(self) -> None:
+        """Forget the recorded token so the next ``maybe_reload`` re-reads the
+        file. Used when a write succeeded but the swap did not."""
+        self._config_token = None
 
     def maybe_reload(self, config_path) -> bool:
         """Reload iff the config file changed since the last recorded token.

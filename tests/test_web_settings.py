@@ -32,19 +32,17 @@ def test_put_settings_bad_proxy_400(web_client, web_env):
     assert load_config(cfg_path).proxy.url is None  # not written
 
 
-def test_put_settings_reload_failure_is_500_and_token_not_primed(
+def test_put_settings_reload_failure_is_500_and_token_invalidated(
     web_client, web_env, monkeypatch
 ):
     sched = web_client.app.state.scheduler
-    token_before = sched._config_token
-    primed = []
     monkeypatch.setattr(sched, "reload", lambda cfg: False)
-    monkeypatch.setattr(sched, "prime_config_token", lambda p: primed.append(p))
 
     r = web_client.put("/api/settings", json={"xteink": {"password": "newpass"}})
     assert r.status_code == 500
-    assert primed == []  # watcher must be left free to retry
-    assert sched._config_token == token_before
+    # The token is primed before reload(), so a failed swap must clear it again;
+    # otherwise the watcher would never retry the (valid) on-disk config.
+    assert sched._config_token is None
     # config is valid, so it IS written to disk (operator sees the 500)
     cfg_path, _ = web_env
     assert load_config(cfg_path).xteink.password == "newpass"

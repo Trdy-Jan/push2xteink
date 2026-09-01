@@ -360,6 +360,64 @@ def test_run_now_after_shutdown_returns_failed(tmp_path):
     st.close()
 
 
+# --- C1: the non-concurrency guard lives in _run, so EVERY dispatch path
+# (cron fire, submit()'s manual job, run_now) is covered, not just run_now. ---
+def test_cron_dispatch_skips_when_task_already_active(tmp_path):
+    st = State(tmp_path / "s.db")
+    fp = FakePipeline(); fp.block = threading.Event()
+    s, _ = _sched(_config(), st)
+    s._pipeline = fp
+    # A manual run (submit -> _run) is in flight...
+    t = threading.Thread(target=s._run, args=("t1",)); t.start()
+    for _ in range(200):
+        if fp.calls: break
+        time.sleep(0.01)
+    try:
+        # ...and the cron job for the same task fires. Distinct APS job ids, so
+        # max_instances=1 does not help; the guard must.
+        out = s._run("t1")
+        assert out.status == "skipped" and "already running" in out.message
+    finally:
+        fp.block.set(); t.join(5)
+    assert fp.calls == ["t1"]       # one run, one runs row, one file pushed
+    st.close()
+
+
+def test_run_after_shutdown_returns_failed(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, fp = _sched(_config(), st)
+    s.start()
+    s.shutdown()
+    out = s._run("t1")
+    assert out.status == "failed" and "shut down" in out.message
+    assert fp.calls == []
+    st.close()
+
+
+def test_submit_after_shutdown_adds_no_job(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, fp = _sched(_config(), st)
+    s.start()
+    s.shutdown()
+    s.submit("t1")                 # must not raise (APS is stopped) nor queue
+    assert s._aps.get_jobs() == []
+    assert fp.calls == []
+    st.close()
+
+
+def test_invalidate_config_token_clears_it(tmp_path):
+    st = State(tmp_path / "s.db")
+    cfg = tmp_path / "config.yaml"
+    shutil.copy(FIXTURE, cfg)
+    s, _ = _sched(_config(), st)
+    s.prime_config_token(cfg)
+    assert s._config_token is not None
+    s.invalidate_config_token()
+    assert s._config_token is None
+    assert s.maybe_reload(cfg) is not None  # re-reads rather than short-circuiting
+    st.close()
+
+
 # --- P5-enabling accessors ---
 def test_config_property_reflects_live_config(tmp_path):
     st = State(tmp_path / "s.db")
