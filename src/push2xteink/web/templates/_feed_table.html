@@ -8,7 +8,8 @@
       {% for f in feeds %}
       <tr id="feed-row-{{ f.id }}">
         <td>{{ f.id }}</td>
-        <td><input name="url" value="{{ f.url }}" size="40"></td>
+        <td><input name="url" value="{{ f.url }}" size="40" required
+                   type="url" pattern="https?://.*"></td>
         <td>
           <input type="hidden" name="full_text" value="false">
           <input type="checkbox" name="full_text" value="true"

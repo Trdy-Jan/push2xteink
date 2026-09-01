@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from push2xteink.models import Article, Config, DEFAULT_PROMPT, ProxyConfig
+from push2xteink.models import Article, Config, DEFAULT_PROMPT, Feed, ProxyConfig
 
 
 @pytest.mark.parametrize("url", ["http://127.0.0.1:7890", "socks5://h:1", "https://p:8080", None])
@@ -174,3 +174,24 @@ def test_article_full():
     )
     assert a.content_is_full_text is True
     assert a.published_at.year == 2026
+
+
+# --- I5: Feed.url must be a real http(s) URL ---
+
+
+@pytest.mark.parametrize("bad", ["", "notaurl", "ftp://x/rss", "  ", "//a.example/rss"])
+def test_feed_url_rejects_non_http(bad):
+    with pytest.raises(ValidationError):
+        Feed(id="a", url=bad)
+
+
+def test_feed_id_rejects_empty():
+    with pytest.raises(ValidationError):
+        Feed(id="", url="https://a.example/rss")
+
+
+@pytest.mark.parametrize(
+    "good", ["http://a.example/rss", "https://a.example/rss?x=1"]
+)
+def test_feed_url_accepts_http_and_https(good):
+    assert Feed(id="a", url=good).url == good

@@ -67,10 +67,19 @@ class FetchConfig(BaseModel):
 class Feed(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    url: str
+    id: str = Field(min_length=1)
+    url: str = Field(min_length=1)
     full_text: bool = True
     use_proxy: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def _check_url(cls, v: str) -> str:
+        # The feeds table lets a user blank the URL in one click; without this
+        # the save succeeds and every task using the feed fails at runtime.
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(f"feed url must start with http:// or https://, got {v!r}")
+        return v
 
 
 class Task(BaseModel):

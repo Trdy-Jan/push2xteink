@@ -72,7 +72,9 @@ def test_fetch_connect_error_returns_error_result():
 
 
 def test_fetch_malformed_url_returns_error_result():
-    result = fetch_feed(Feed(id="x", url="not a url"))
+    # Feed.url now rejects this at config-load time (I5); model_construct keeps
+    # the runtime belt-and-braces guard in fetch_feed under test.
+    result = fetch_feed(Feed.model_construct(id="x", url="not a url"))
     assert isinstance(result, FeedResult)
     assert result.articles == []
     assert result.error is not None

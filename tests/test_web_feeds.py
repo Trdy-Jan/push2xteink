@@ -48,3 +48,27 @@ def test_delete_feed_204(web_client, web_env):
 
 def test_delete_feed_404(web_client):
     assert web_client.delete("/api/feeds/ghost").status_code == 404
+
+
+# --- I5: a blank / schemeless URL must not be savable from the feeds table ---
+
+
+def test_update_feed_blank_url_rejected(web_client, web_env):
+    r = web_client.put("/api/feeds/hn", json={"url": ""})
+    assert r.status_code == 400
+    from push2xteink.config import load_config
+
+    cfg_path, _ = web_env
+    assert load_config(cfg_path).feeds[0].url == "https://news.ycombinator.com/rss"
+
+
+def test_page_feed_update_blank_url_shows_error_not_500(web_client, web_env):
+    r = web_client.post(
+        "/feeds/hn", data={"url": "", "full_text": "true", "use_proxy": "false"}
+    )
+    assert r.status_code == 200
+    assert "url" in r.text  # the feeds table re-renders with an error banner
+    from push2xteink.config import load_config
+
+    cfg_path, _ = web_env
+    assert load_config(cfg_path).feeds[0].url == "https://news.ycombinator.com/rss"
