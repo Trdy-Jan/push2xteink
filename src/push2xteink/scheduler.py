@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
 from apscheduler.executors.pool import ThreadPoolExecutor as APSThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
+from .config import ConfigError, load_config
 from .models import Config
 from .pipeline import Pipeline, RunOutcome
 from .state import State
@@ -48,6 +51,8 @@ class Scheduler:
         self._reload_lock = threading.RLock()
         self._shutdown = False
         self._orphans: list[Pipeline] = []
+        self._config_token: tuple[int, int] | None = None
+        self._last_bad_token: tuple[int, int] | None = None
 
     # --- job body ---
     def _run(self, task_id: str) -> RunOutcome | None:
@@ -86,6 +91,56 @@ class Scheduler:
         if outcome is None:
             return RunOutcome(task_id, "failed", 0, None, None, "scheduler internal error")
         return outcome
+
+    def submit(self, task_id: str) -> None:
+        """Dispatch a one-off manual run of ``task_id`` via the executor.
+
+        The cron job (if any) for the same task is untouched; the manual job
+        uses a distinct ``manual:`` id.
+        """
+        self._aps.add_job(
+            self._run,
+            DateTrigger(run_date=datetime.now(timezone.utc)),
+            args=[task_id],
+            id=f"manual:{task_id}",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
+    # --- config reload ---
+    @staticmethod
+    def _token(path) -> tuple[int, int] | None:
+        try:
+            st = Path(path).stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def prime_config_token(self, path: Path) -> None:
+        """Record the current config file token so a following unchanged
+        ``maybe_reload`` is a no-op. Called by serve/lifespan after ``start()``."""
+        self._config_token = self._token(path)
+
+    def maybe_reload(self, config_path) -> bool:
+        """Reload iff the config file changed since the last recorded token.
+
+        Returns True only when a reload actually happened. A file that is
+        missing, unchanged, or invalid returns False and leaves the scheduler
+        running on its current config.
+        """
+        token = self._token(config_path)
+        if token is None or token == self._config_token:
+            return False
+        try:
+            new_config = load_config(Path(config_path))
+        except ConfigError as exc:
+            if token != self._last_bad_token:
+                logger.warning("config reload skipped (invalid): %s", exc)
+                self._last_bad_token = token
+            return False
+        self.reload(new_config)
+        self._config_token = token
+        return True
 
     # --- jobs ---
     def _register_jobs(self) -> None:

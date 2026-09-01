@@ -1,12 +1,18 @@
+import shutil
 import threading
+import time
 from datetime import datetime
+from pathlib import Path
 
 from apscheduler.schedulers.base import STATE_RUNNING
 
+from push2xteink.config import load_config
 from push2xteink.models import Config, Feed, FetchConfig, ProxyConfig, Task, XteinkConfig, AIConfig, AIProvider
 from push2xteink.pipeline import RunOutcome
 from push2xteink.scheduler import Scheduler
 from push2xteink.state import State
+
+FIXTURE = Path(__file__).parent / "fixtures" / "config_valid.yaml"
 
 
 def _config(**over) -> Config:
@@ -364,6 +370,60 @@ def test_config_property_reflects_live_config(tmp_path):
             Task(id="t9", name="T9", feeds=["a"], schedule="0 7 * * *", enabled=True),
         ]))
         assert [t.id for t in s.config.tasks] == ["t9"]
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_submit_dispatches_manual_run_via_executor(tmp_path):
+    st = State(tmp_path / "s.db")
+    fp = FakePipeline()
+    s = Scheduler(_config(), st, pipeline_factory=lambda c, x: fp)
+    s.start()
+    try:
+        s.submit("t1")
+        for _ in range(200):
+            if fp.calls:
+                break
+            time.sleep(0.01)
+        assert fp.calls == ["t1"]
+        assert {j.id for j in s._aps.get_jobs()} & {"manual:t1", "t1"}  # cron job unaffected
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_maybe_reload_only_on_change(tmp_path):
+    cfgfile = tmp_path / "c.yaml"
+    shutil.copy(FIXTURE, cfgfile)
+    st = State(tmp_path / "s.db")
+    built = []
+    s = Scheduler(load_config(cfgfile), st, pipeline_factory=lambda c, x: (built.append(c) or FakePipeline()))
+    s.start()
+    s.prime_config_token(cfgfile)
+    try:
+        assert s.maybe_reload(cfgfile) is False        # unchanged
+        cfgfile.write_text(cfgfile.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        import os
+        os.utime(cfgfile, None)
+        assert s.maybe_reload(cfgfile) is True          # changed
+        assert s.maybe_reload(cfgfile) is False         # unchanged again
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_maybe_reload_bad_config_keeps_running(tmp_path, caplog):
+    cfgfile = tmp_path / "c.yaml"
+    shutil.copy(FIXTURE, cfgfile)
+    st = State(tmp_path / "s.db")
+    s = Scheduler(load_config(cfgfile), st, pipeline_factory=lambda c, x: FakePipeline())
+    s.start()
+    s.prime_config_token(cfgfile)
+    try:
+        cfgfile.write_text("xteink: [unclosed\n", encoding="utf-8")
+        assert s.maybe_reload(cfgfile) is False
+        assert s._aps.running                            # still up
     finally:
         s.shutdown()
     st.close()
