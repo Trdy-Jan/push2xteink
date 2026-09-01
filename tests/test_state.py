@@ -203,25 +203,3 @@ def test_finish_run_rejects_unknown_status(tmp_path):
     with pytest.raises(sqlite3.IntegrityError):
         s.finish_run(rid, status="bogus", now=NOW)
     s.close()
-
-
-def test_prune_seen_items_only_removes_pushed_and_old(tmp_path):
-    s = State(tmp_path / "s.db")
-    now = datetime(2026, 8, 31, tzinfo=timezone.utc)
-    old = (now - timedelta(days=120)).isoformat()
-    recent = (now - timedelta(days=10)).isoformat()
-    cutoff = (now - timedelta(days=90)).isoformat()
-    s._conn.executemany(
-        "INSERT INTO seen_items(feed_id,item_guid,first_seen_at,pushed_at) VALUES(?,?,?,?)",
-        [
-            ("f", "old_pushed", old, old),        # delete
-            ("f", "old_unpushed", old, None),     # keep (retry window semantics)
-            ("f", "recent_pushed", recent, recent),  # keep (not old)
-        ],
-    )
-    s._conn.commit()
-    n = s.prune_seen_items(cutoff)
-    assert n == 1
-    rows = {r["item_guid"] for r in s._conn.execute("SELECT item_guid FROM seen_items")}
-    assert rows == {"old_unpushed", "recent_pushed"}
-    s.close()

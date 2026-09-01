@@ -123,21 +123,6 @@ class State:
             )
             self._conn.commit()
 
-    def prune_seen_items(self, before_iso: str) -> int:
-        """Delete already-pushed seen_items first seen before ``before_iso``.
-
-        Rows with ``pushed_at IS NULL`` are inside the retry window; deleting
-        them would cause a re-push, so they are always kept.
-        """
-        with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM seen_items "
-                "WHERE pushed_at IS NOT NULL AND first_seen_at < ?",
-                (before_iso,),
-            )
-            self._conn.commit()
-            return cur.rowcount
-
     # --- runs ---
     def start_run(self, task_id: str, *, now: datetime | None = None) -> int:
         with self._lock:

@@ -377,7 +377,7 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **配置注释保留（修订第 8 节措辞）**：`write_config` 现按段落级 key 重写，只保证**文件头注释和段落注释**保留；`feeds:` / `tasks:` 列表项的**行内联注释在整体重写时会丢失**。P1 已通过 `extra="forbid"`（未知 key 在 load 阶段报错）堵住「网页保存抹掉手写内容」的数据丢失风险。**P5 增加一个任务**：改为递归合并进现有 `CommentedMap`、只增删列表项、原地改叶子标量，以完整保留注释。
 - **APScheduler 星期字段**：`CronTrigger.from_crontab("... 0")` 中 `0` 是**周一**（APScheduler 3.x），非标准 cron 的周日。校验与执行都用同一 `CronTrigger` 所以自洽；但 P4/P5 的「人类可读预览」必须按 APScheduler 语义生成，否则会与用户查的 crontab 手册不一致。P4 决定：要么在文档里标注，要么在校验层把星期字段归一化成标准 cron。
 - **`DEFAULT_PROMPT` 与 P2c 的契约**：当前 `DEFAULT_PROMPT` 只是一句指令，没有文章正文占位符。P2c 规划时定清楚 `summarize.py` 如何拼装（system message？`prompt + "\n\n" + 正文`？），并在 prompt 模板里显式留正文位置。
-- **`seen_items` 无限增长**：无清理逻辑。P4/P6（谁负责运维）加一个按 `first_seen_at` 的定期 prune。
+- **`seen_items` 无限增长**：**决定不做**：`seen_items` 每行约 120 字节，10 个源约 9 MB/年，`is_item_pushable` 走主键索引不随表增长变慢；按时间清理会让仍在 feed 里的旧文章重新变成「新」被再次推送，得不偿失。若某天真的需要，按「每源保留最近 N 条已推送行」而非按时间。（P6 曾加过按时间的 daily prune，终审发现它破坏「推过一次永不再推」不变量，已整体 revert。）
 - **`State` 已线程安全**：`check_same_thread=False` + WAL + `busy_timeout=5000` + 每方法一把 `threading.Lock`。P3/P4/P5 可安全在多线程（FastAPI 请求线程 + APScheduler worker）共享同一个 `State` 实例，无需每线程新建。
 - **数值下限已在模型层强制**：`qps` / `timeout_seconds` / `concurrency` / `first_run_lookback_hours` 均 `> 0`，`max_retries >= 0`。P2c 的 `1/qps` 限流器不会遇到 0。
 - **`runs.status` 有 DB CHECK 约束**：只接受 `running|success|skipped|failed`。`finish_run` 的 `status` 参数是 `Literal`。注意 CHECK 只对新建 DB 生效，P1 尚无迁移机制——后续若改 `_SCHEMA` 需要迁移策略。
@@ -405,10 +405,10 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **P5 不要扩展 `_serve` 的 watch loop**：把它抽成一个 `_ConfigWatcher(path, on_change)` daemon 线程 helper（uvicorn 拥有主线程并安装自己的 SIGINT/SIGTERM）。P5 FastAPI lifespan：startup 构建 State + Scheduler + 启动 watcher；shutdown 停 watcher → `sched.shutdown()` → `state.close()`。
 - **`Scheduler.run_now` 是同步的**（阻塞调用方整个 pipeline run，数分钟）。网页「立即执行」按钮需要一个 fire-and-forget `Scheduler.submit(task_id)`，通过 APS executor 以一个独立 job id（`f"manual:{task_id}"`，**不是** `task_id`——`replace_existing` 会覆盖 cron job）派发，从而共享 4-worker 上限与 APS instance 计数。`run_now` 保留给 CLI / 测试。
 - **P5 网页保存 `config.yaml` 的 handler 应让 watcher 去 reload**（≤5s 延迟），不要直接调 `sched.reload()`——否则 watcher 会在 mtime 变化时再 reload 一次（双重 pause+drain）。
-- **P6 Dockerfile**：`ENV PYTHONUNBUFFERED=1`，让 `print()` 与日志实时写到 `docker logs`；`docker-compose.yml`：`stop_grace_period: 150s`（drain_timeout 是 120s；Docker 默认 10s 会在 `push_file` 中途 SIGKILL——按 mark_pushed-after-upload 不变量是安全的，只是吵）。
+- **P6 Dockerfile**：`ENV PYTHONUNBUFFERED=1`，让 `print()` 与日志实时写到 `docker logs`；`docker-compose.yml`：`stop_grace_period: 150s`（web 入口用 `_WEB_DRAIN_TIMEOUT = 25s` 优雅排空，见 `web/app.py`；旧文写的 120s 是 CLI `_serve` 的值，容器跑的是 web 入口。Docker 默认 10s 会在 `push_file` 中途 SIGKILL——按 mark_pushed-after-upload 不变量是安全的，只是吵）。
 - **misfire / 内存 jobstore**：见第 9 节修订——容器停机错过的运行不补跑，靠 lookback + `seen_items` 重试窗口兜底。
 - **已应用的复审修复**（本分支）：C1 reload 工厂异常不再 brick 调度器（`_serve` watch loop 兜底 `except Exception` 打印 `reload failed`）；I1 reload drain→swap 竞态（`_run` 在 `_cond` 下与注册原子地捕获 pipeline 引用，swap 也在同一把锁下）；I2 `reload()` / `shutdown()` 由 `threading.RLock` 串行化；I3 `run_now` 遵守非并发不变量并在 shutdown 后拒绝；M2 `shutdown` 改 `aps.shutdown(wait=False)` + 单次 bounded `_drain`（`drain_timeout` 也覆盖 cron job）；I5 `_serve` 顶部 `logging.basicConfig`；M1 mtime token 用 `(st_mtime_ns, st_size)`；M6 `start()` 失败时 `sched.shutdown()` 关掉已建 Pipeline 的 httpx client；M8 在 `load_config` 前读 mtime；M9 `start()` 后记录各 job 的 next run time。新增 P5-enabling accessor：`Scheduler.config`（property）、`Scheduler.next_run_time(task_id)`。
-- **延后**：M4（第二个信号升级为硬退出）、M5（生产信号路径无测试）——留给 P5 lifespan 改造。`seen_items` 定期 prune（见第 13 节）仍未做。
+- **延后**：M4（第二个信号升级为硬退出）、M5（生产信号路径无测试）——留给 P5 lifespan 改造。`seen_items` 定期 prune：见第 13 节，**决定不做**。
 
 ## P5 实现后补充（整体复审发现，供 P6）
 
@@ -417,5 +417,5 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **`_task_row_view` 每行一次 `last_run_for_task` 查询**：任务列表渲染是 N+1 次 SQLite 查询。任务数是个位数量级，暂不优化；若 P6 后任务数增长，改成一次 `GROUP BY task_id` 的批量查询。
 - **`api_settings.test_xteink` 直接调用 `XteinkClient._access_token`**：探活复用了私有方法。若 P6 重构 `xteink.py`，需要一个公开的 `ping()` / `login()` 入口。
 - **`hx-confirm` 删除确认无测试**：纯浏览器行为，TestClient 覆盖不到；留给手动冒烟。
-- **`seen_items` 定期 prune 仍未做**（见第 13 节）：P6 或单独的运维计划。
+- **`seen_items` 定期 prune**（见第 13 节）：**决定不做**——按时间清理会重新推送仍在 feed 里的旧文章。
 - **`proxy.url` 不做脱敏**：不在规范的脱敏清单里（脱敏只覆盖 `xteink.password` 与 `ai.*.api_key`）。若代理 URL 里带凭据，属已知取舍。
