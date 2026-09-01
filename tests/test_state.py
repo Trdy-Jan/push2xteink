@@ -113,6 +113,27 @@ def test_recent_runs_ordered_desc(tmp_path):
     s.close()
 
 
+def test_get_run(tmp_path):
+    s = State(tmp_path / "s.db")
+    rid = s.start_run("a", now=NOW)
+    s.finish_run(rid, status="success", item_count=4, file_name="a.epub")
+    row = s.get_run(rid)
+    assert row["id"] == rid and row["status"] == "success" and row["item_count"] == 4
+    assert s.get_run(999999) is None
+    s.close()
+
+
+def test_last_run_for_task(tmp_path):
+    s = State(tmp_path / "s.db")
+    assert s.last_run_for_task("a") is None
+    s.start_run("a", now=NOW)
+    r2 = s.start_run("a", now=NOW + timedelta(minutes=1))
+    s.start_run("b", now=NOW + timedelta(minutes=2))
+    row = s.last_run_for_task("a")
+    assert row["id"] == r2 and row["task_id"] == "a"
+    s.close()
+
+
 def test_record_seen_is_thread_safe(tmp_path):
     s = State(tmp_path / "s.db")
     errors: list[BaseException] = []

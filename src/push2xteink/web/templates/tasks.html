@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}任务 - push2xteink{% endblock %}
+{% block content %}
+<h1>推送任务</h1>
+<div class="toolbar">
+  <button hx-get="/tasks/new" hx-target="#task-form" hx-swap="innerHTML">新建任务</button>
+</div>
+<div id="task-form"></div>
+{% include "_task_table.html" %}
+{% endblock %}

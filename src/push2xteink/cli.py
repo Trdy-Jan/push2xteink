@@ -1,19 +1,71 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import logging
 import os
-import signal
 import sqlite3
 import sys
-import threading
 from pathlib import Path
+
+import uvicorn
 
 from .config import ConfigError, load_config
 from .pipeline import Pipeline
-from .scheduler import Scheduler
 from .state import State
+
+
+# Spec §10: a first `docker compose up` with no config.yaml must leave the user
+# a filled-in-able template, not a crashloop on "config file not found".
+# Mirrors the spec §4 example. Deliberately NOT loadable as-is: the placeholders
+# have to be replaced, and `serve` exits 2 until they are.
+_SAMPLE_CONFIG = """\
+# push2xteink 配置文件
+# 修改后保存即可热更新（无需重启容器）；Web 界面读写的也是这个文件。
+
+xteink:
+  api_base: https://api-prod.xteink.cn
+  username: "<手机号>"           # 必填
+  password: "<密码>"             # 必填
+
+proxy:
+  # 留空表示不走代理；支持 http:// https:// socks5://
+  url:
+
+# AI 摘要（可选）。不需要摘要就整段删掉，并把 tasks[].summarize 设为 false。
+# ai:
+#   use_proxy: false             # AI 请求是否走上面的 proxy.url
+#   primary:
+#     base_url: https://api.example.com/v1
+#     api_key: "<key>"
+#     model: gpt-4o-mini
+#   fallback:                    # 可选；primary 失败时启用
+#     base_url: https://api.backup.com/v1
+#     api_key: "<key>"
+#     model: claude-3-5-haiku
+#   timeout_seconds: 60
+#   max_retries: 2
+#   qps: 1
+
+fetch:
+  timeout_seconds: 20
+  concurrency: 5
+
+feeds:
+  - id: hn
+    url: https://news.ycombinator.com/rss
+    full_text: true              # 默认 true；抓全文失败时回退到 RSS 内容
+    use_proxy: false
+
+tasks:
+  - id: morning-brief
+    name: 早报
+    feeds: [hn]
+    schedule: "0 7 * * *"        # 标准 5 段 cron，按容器时区（TZ）解释
+    summarize: false             # 需要 AI 摘要时改 true，并填好上面的 ai 段
+    format: epub                 # epub | txt
+    enabled: true
+    first_run_lookback_hours: 48 # 仅任务从未成功执行过时生效
+"""
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -24,17 +76,11 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("list", help="list configured tasks")
     run = sub.add_parser("run", help="run one task now")
     run.add_argument("task_id")
-    sub.add_parser("serve", help="run the scheduler (blocks)")
+    sub.add_parser("serve", help="run the web app + scheduler (blocks)")
     return p
 
 
-def _serve(
-    config_path: Path,
-    db_path: Path,
-    *,
-    _stop: threading.Event | None = None,
-    _scheduler_cls: type | None = None,
-) -> int:
+def _serve(config_path: Path, db_path: Path, *, _run=None) -> int:
     # Headless containers have nothing else wiring up logging: without this the
     # scheduler's logger.* calls reach stderr only via lastResort (no timestamp)
     # and APScheduler's INFO job lines vanish entirely. basicConfig is idempotent.
@@ -43,84 +89,43 @@ def _serve(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    def _mtime_token() -> tuple[int, int] | None:
-        # (st_mtime_ns, st_size): a same-second second save on a 1s-granularity
-        # FS would be missed by an st_mtime float.
+    # Only `serve` bootstraps — it's the container entrypoint. `list` / `run`
+    # keep the plain "not found" error.
+    if not config_path.exists():
         try:
-            st = config_path.stat()
-        except OSError:
-            return None
-        return (st.st_mtime_ns, st.st_size)
-
-    # Read mtime BEFORE load_config so a config edit landing between this load and
-    # the first loop stat() still triggers a reload.
-    last_mtime = _mtime_token()
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+        except OSError as exc:
+            print(f"cannot create config file {config_path}: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"wrote a sample config to {config_path} — fill it in and restart",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
-        config = load_config(config_path)
+        load_config(config_path)  # fail-fast; the app's lifespan loads it again
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
 
-    try:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        state = State(db_path)
-    except (OSError, sqlite3.Error) as exc:
-        print(f"database error: {exc}", file=sys.stderr)
-        return 2
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    stop = _stop or threading.Event()
-    if _stop is None:
-        # Main-thread only; skip when a test injects its own stop event so we
-        # don't clobber the test process's signal handlers.
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, lambda *_: stop.set())
+    # Imported here so `list` / `run` don't pay the fastapi import cost.
+    from .web.app import create_app
 
-    sched = None
-    try:
-        sched = (_scheduler_cls or Scheduler)(config, state)
-        sched.start()
-    except Exception as exc:  # noqa: BLE001 - bad proxy.url etc. -> friendly exit 2
-        print(f"scheduler init failed: {exc}", file=sys.stderr)
-        if sched is not None:
-            # Close the just-built Pipeline's httpx clients too, not just the db.
-            with contextlib.suppress(Exception):
-                sched.shutdown()
-        state.close()
-        return 2
-    ids = sched.enabled_task_ids
-    print(f"scheduler started: {len(ids)} task(s): {', '.join(ids)}")
-
-    try:
-        while not stop.wait(5.0):
-            mtime = _mtime_token()
-            if mtime is None or mtime == last_mtime:
-                continue
-            last_mtime = mtime
-            try:
-                sched.reload(load_config(config_path))
-                print("config reloaded")
-            except ConfigError as exc:
-                print(f"reload skipped (invalid config): {exc}", file=sys.stderr)
-            except Exception as exc:  # noqa: BLE001 - a bad config must never take down the scheduler
-                print(f"reload failed: {exc!r}", file=sys.stderr)
-    finally:
-        try:
-            sched.shutdown()
-        finally:
-            state.close()
+    app = create_app(config_path, db_path)
+    run = _run or uvicorn.run
+    run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
     return 0
 
 
-def main(
-    argv: list[str] | None = None,
-    *,
-    _serve_stop: threading.Event | None = None,
-) -> int:
+def main(argv: list[str] | None = None, *, _run=None) -> int:
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.cmd is None or args.cmd == "serve":
-        return _serve(Path(args.config), Path(args.db), _stop=_serve_stop)
+        return _serve(Path(args.config), Path(args.db), _run=_run)
 
     try:
         config = load_config(Path(args.config))

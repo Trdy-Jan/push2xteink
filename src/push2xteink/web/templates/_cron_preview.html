@@ -1,0 +1,11 @@
+{% if error %}
+<p class="error">非法 cron 表达式：{{ error }}</p>
+{% else %}
+<p>接下来 3 次执行（服务器时区 {{ tz }}）：</p>
+<ul>
+  {% for t in next_runs %}<li>{{ t | ts }}</li>{% else %}<li>（无）</li>{% endfor %}
+</ul>
+{% if dow_note %}
+<p class="hint">APScheduler 星期：0=周一 … 6=周日（与标准 cron 不同）</p>
+{% endif %}
+{% endif %}

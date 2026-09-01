@@ -1,12 +1,19 @@
+import logging
+import shutil
 import threading
+import time
 from datetime import datetime
+from pathlib import Path
 
 from apscheduler.schedulers.base import STATE_RUNNING
 
+from push2xteink.config import load_config
 from push2xteink.models import Config, Feed, FetchConfig, ProxyConfig, Task, XteinkConfig, AIConfig, AIProvider
 from push2xteink.pipeline import RunOutcome
 from push2xteink.scheduler import Scheduler
 from push2xteink.state import State
+
+FIXTURE = Path(__file__).parent / "fixtures" / "config_valid.yaml"
 
 
 def _config(**over) -> Config:
@@ -353,6 +360,64 @@ def test_run_now_after_shutdown_returns_failed(tmp_path):
     st.close()
 
 
+# --- C1: the non-concurrency guard lives in _run, so EVERY dispatch path
+# (cron fire, submit()'s manual job, run_now) is covered, not just run_now. ---
+def test_cron_dispatch_skips_when_task_already_active(tmp_path):
+    st = State(tmp_path / "s.db")
+    fp = FakePipeline(); fp.block = threading.Event()
+    s, _ = _sched(_config(), st)
+    s._pipeline = fp
+    # A manual run (submit -> _run) is in flight...
+    t = threading.Thread(target=s._run, args=("t1",)); t.start()
+    for _ in range(200):
+        if fp.calls: break
+        time.sleep(0.01)
+    try:
+        # ...and the cron job for the same task fires. Distinct APS job ids, so
+        # max_instances=1 does not help; the guard must.
+        out = s._run("t1")
+        assert out.status == "skipped" and "already running" in out.message
+    finally:
+        fp.block.set(); t.join(5)
+    assert fp.calls == ["t1"]       # one run, one runs row, one file pushed
+    st.close()
+
+
+def test_run_after_shutdown_returns_failed(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, fp = _sched(_config(), st)
+    s.start()
+    s.shutdown()
+    out = s._run("t1")
+    assert out.status == "failed" and "shut down" in out.message
+    assert fp.calls == []
+    st.close()
+
+
+def test_submit_after_shutdown_adds_no_job(tmp_path):
+    st = State(tmp_path / "s.db")
+    s, fp = _sched(_config(), st)
+    s.start()
+    s.shutdown()
+    s.submit("t1")                 # must not raise (APS is stopped) nor queue
+    assert s._aps.get_jobs() == []
+    assert fp.calls == []
+    st.close()
+
+
+def test_invalidate_config_token_clears_it(tmp_path):
+    st = State(tmp_path / "s.db")
+    cfg = tmp_path / "config.yaml"
+    shutil.copy(FIXTURE, cfg)
+    s, _ = _sched(_config(), st)
+    s.prime_config_token(cfg)
+    assert s._config_token is not None
+    s.invalidate_config_token()
+    assert s._config_token is None
+    assert s.maybe_reload(cfg) is not None  # re-reads rather than short-circuiting
+    st.close()
+
+
 # --- P5-enabling accessors ---
 def test_config_property_reflects_live_config(tmp_path):
     st = State(tmp_path / "s.db")
@@ -364,6 +429,103 @@ def test_config_property_reflects_live_config(tmp_path):
             Task(id="t9", name="T9", feeds=["a"], schedule="0 7 * * *", enabled=True),
         ]))
         assert [t.id for t in s.config.tasks] == ["t9"]
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_submit_dispatches_manual_run_via_executor(tmp_path):
+    st = State(tmp_path / "s.db")
+    fp = FakePipeline()
+    s = Scheduler(_config(), st, pipeline_factory=lambda c, x: fp)
+    s.start()
+    try:
+        s.submit("t1")
+        for _ in range(200):
+            if fp.calls:
+                break
+            time.sleep(0.01)
+        assert fp.calls == ["t1"]
+        assert {j.id for j in s._aps.get_jobs()} & {"manual:t1", "t1"}  # cron job unaffected
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_maybe_reload_only_on_change(tmp_path):
+    cfgfile = tmp_path / "c.yaml"
+    shutil.copy(FIXTURE, cfgfile)
+    st = State(tmp_path / "s.db")
+    built = []
+    s = Scheduler(load_config(cfgfile), st, pipeline_factory=lambda c, x: (built.append(c) or FakePipeline()))
+    s.start()
+    s.prime_config_token(cfgfile)
+    try:
+        assert s.maybe_reload(cfgfile) is False        # unchanged
+        cfgfile.write_text(cfgfile.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        import os
+        os.utime(cfgfile, None)
+        assert s.maybe_reload(cfgfile) is True          # changed
+        assert s.maybe_reload(cfgfile) is False         # unchanged again
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_maybe_reload_bad_config_keeps_running(tmp_path, caplog):
+    cfgfile = tmp_path / "c.yaml"
+    shutil.copy(FIXTURE, cfgfile)
+    st = State(tmp_path / "s.db")
+    s = Scheduler(load_config(cfgfile), st, pipeline_factory=lambda c, x: FakePipeline())
+    s.start()
+    s.prime_config_token(cfgfile)
+    try:
+        cfgfile.write_text("xteink: [unclosed\n", encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="push2xteink.scheduler"):
+            assert s.maybe_reload(cfgfile) is False
+            warnings = [
+                r for r in caplog.records
+                if r.levelno == logging.WARNING
+                and ("invalid" in r.getMessage() or "reload" in r.getMessage())
+            ]
+            assert len(warnings) == 1
+            # same bad file again -> logged once per distinct bad token
+            assert s.maybe_reload(cfgfile) is False
+            warnings = [
+                r for r in caplog.records
+                if r.levelno == logging.WARNING
+                and ("invalid" in r.getMessage() or "reload" in r.getMessage())
+            ]
+            assert len(warnings) == 1
+        assert s._aps.running                            # still up
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_maybe_reload_does_not_advance_token_when_swap_aborts(tmp_path):
+    cfgfile = tmp_path / "c.yaml"
+    shutil.copy(FIXTURE, cfgfile)
+    st = State(tmp_path / "s.db")
+    calls = {"n": 0}
+
+    def factory(c, x):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("cannot build pipeline for this config")
+        return FakePipeline()
+
+    s = Scheduler(load_config(cfgfile), st, pipeline_factory=factory)
+    s.start()
+    s.prime_config_token(cfgfile)
+    try:
+        cfgfile.write_text(cfgfile.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        # valid YAML+schema, but the pipeline factory raises -> reload aborts
+        assert s.maybe_reload(cfgfile) is False
+        assert s._aps.running
+        # token NOT advanced: a later successful build retries the same file
+        calls["n"] = 0
+        assert s.maybe_reload(cfgfile) is True
     finally:
         s.shutdown()
     st.close()

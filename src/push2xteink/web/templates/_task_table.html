@@ -1,0 +1,8 @@
+<table id="task-table"{% if oob|default(false) %} hx-swap-oob="true"{% endif %}>
+  <thead>
+    <tr><th>名称</th><th>下次执行</th><th>状态</th><th>启用</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    {% for t in tasks %}{% include "_task_row.html" %}{% endfor %}
+  </tbody>
+</table>

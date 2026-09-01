@@ -370,6 +370,7 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - EPUB 章节内的图片：先不下载内嵌，保留/剥离 `<img>` 待实现时定（倾向剥离，e-ink 意义不大）
 - `qps` 限流的实现（简单 sleep 间隔即可）
 - Web 端口、默认 lookback 等常量的最终取值
+- 配置级 `timezone` 字段（让 cron 表达式按指定时区解释）留作 P6 之后的增强；当前所有 cron 按容器时区（P6 用 `TZ` 环境变量固定，默认 UTC）解释。P5 已把 UI 的时间显示统一到服务器时区并在页面上标注时区名（`_fmt_ts` / cron 预览），不再混用 UTC 与本地时钟。
 
 ## 13. P1 实现后补充（终审发现，供 P2–P6）
 
@@ -389,6 +390,7 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **`Article.published_at` 时区不变量未在类型层强制**：`feeds.fetch_feed` 产出的都是 aware UTC，但 `models.Article.published_at: datetime | None` 没有 aware 约束；`select_new_articles` 对 naive `now` 有防护、对 naive `published_at` 没有；`builders.format_published` 对 naive 会静默按本地时区偏移。**P1 follow-up**：把字段改成 `pydantic.AwareDatetime | None`，一次性关掉这一类。
 - **`ProxyConfig.url` 无 scheme 校验**：`http://` / `socks5://` 前缀写错（如 `127.0.0.1:7890`）在 P2 只会在运行时被各模块捕获成 per-feed 警告（已加 `ValueError` 到 guard）。**P4/P5 在 config load 阶段校验 scheme**，让用户改配置时立刻报错。
 - **`xteink` 上传对非预期响应体已全部收敛为 `XteinkUploadError`**：login/signature/callback 三处 JSON 解析都过 `_json_dict`（非 JSON body、非 dict body、缺字段、`success:false` 都抛 `XteinkUploadError`）。P3 的失败隔离 `except XteinkUploadError` 可靠。
+- **容器时区必须显式固定（P6 硬性要求）**：`CronTrigger.from_crontab(expr)` 按调度器时区（= 机器本地时区）解释表达式。P6 的 `docker-compose.yml` 必须设 `TZ`（默认 `UTC`）；若 `TZ` 取非 UTC 值，镜像里必须装 `tzdata`，否则 APScheduler 在启动时就会因找不到时区数据抛异常。P5 的 UI 已统一按服务器时区显示并标注时区名（见第 12 节）。
 - **已知延后的小项**（不阻塞 P3）：`Summarizer` 重试无退避（默认 qps=1 时恰好有 1s 间隔）；`safe_filename` 按码点而非字节截断（超长 CJK 任务名可能超 255 字节 `NAME_MAX`）；`select_new_articles(state, feed_id, articles, ...)` 的 `feed_id` 参数与 `Article.feed_id` 冗余。
 
 ## P3 实现后补充（整体复审发现，供 P4–P6）
@@ -407,3 +409,13 @@ docker-compose.yml —— 单服务，挂载 ./data:/data，暴露 Web 端口（
 - **misfire / 内存 jobstore**：见第 9 节修订——容器停机错过的运行不补跑，靠 lookback + `seen_items` 重试窗口兜底。
 - **已应用的复审修复**（本分支）：C1 reload 工厂异常不再 brick 调度器（`_serve` watch loop 兜底 `except Exception` 打印 `reload failed`）；I1 reload drain→swap 竞态（`_run` 在 `_cond` 下与注册原子地捕获 pipeline 引用，swap 也在同一把锁下）；I2 `reload()` / `shutdown()` 由 `threading.RLock` 串行化；I3 `run_now` 遵守非并发不变量并在 shutdown 后拒绝；M2 `shutdown` 改 `aps.shutdown(wait=False)` + 单次 bounded `_drain`（`drain_timeout` 也覆盖 cron job）；I5 `_serve` 顶部 `logging.basicConfig`；M1 mtime token 用 `(st_mtime_ns, st_size)`；M6 `start()` 失败时 `sched.shutdown()` 关掉已建 Pipeline 的 httpx client；M8 在 `load_config` 前读 mtime；M9 `start()` 后记录各 job 的 next run time。新增 P5-enabling accessor：`Scheduler.config`（property）、`Scheduler.next_run_time(task_id)`。
 - **延后**：M4（第二个信号升级为硬退出）、M5（生产信号路径无测试）——留给 P5 lifespan 改造。`seen_items` 定期 prune（见第 13 节）仍未做。
+
+## P5 实现后补充（整体复审发现，供 P6）
+
+- **已应用的复审修复**（本分支）：C1 非并发保证下沉到 `_run`（cron fire + `submit()` 的 `manual:` job 是两个 APS job id，`max_instances=1` 管不到，此前会重复推送同一份文件）；C2 Basic Auth 改成 `BaseHTTPMiddleware`（`FastAPI(dependencies=[...])` 只覆盖 `APIRoute`，`/openapi.json` `/docs` `/redoc` `/static/*` 此前完全裸奔），`/healthz` 显式豁免以便 Docker HEALTHCHECK；I1 列表项之间的独立注释不再漂移（恒等往返已可字节级一致，重排序时注释跟着条目走）；I2 `apply_config_change` 全程持 `app.state.config_lock`；I3 config token 在 `reload()` 之前 priming、失败时 `invalidate_config_token()`，web 侧 `Scheduler` 用 `drain_timeout=25.0`；I4 时间显示统一到服务器时区并标注；I5 `Feed.url` 校验 http(s) scheme；I6 跨源写请求（`Origin` host ≠ `Host`）一律 403；I7 `ConfigError` 不再内嵌 pydantic 的 `input_value`（含明文密码 / api_key）；I8 校验失败时回填用户提交值；I9 `ai.fallback` 可在网页增删；I10 `write_config` 保留原文件权限位（新文件 0600）；首次启动写样例 config 并退出 2。
+- **`/healthz` 是未鉴权端点**：即使设了 `WEB_PASSWORD` 也可匿名访问（只暴露「进程活着」）。P6 的反向代理若要收紧，自行在代理层限制来源。
+- **`_task_row_view` 每行一次 `last_run_for_task` 查询**：任务列表渲染是 N+1 次 SQLite 查询。任务数是个位数量级，暂不优化；若 P6 后任务数增长，改成一次 `GROUP BY task_id` 的批量查询。
+- **`api_settings.test_xteink` 直接调用 `XteinkClient._access_token`**：探活复用了私有方法。若 P6 重构 `xteink.py`，需要一个公开的 `ping()` / `login()` 入口。
+- **`hx-confirm` 删除确认无测试**：纯浏览器行为，TestClient 覆盖不到；留给手动冒烟。
+- **`seen_items` 定期 prune 仍未做**（见第 13 节）：P6 或单独的运维计划。
+- **`proxy.url` 不做脱敏**：不在规范的脱敏清单里（脱敏只覆盖 `xteink.password` 与 `ai.*.api_key`）。若代理 URL 里带凭据，属已知取舍。

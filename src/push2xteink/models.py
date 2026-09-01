@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from apscheduler.triggers.cron import CronTrigger
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DEFAULT_PROMPT = "用中文简洁总结以下文章的核心要点，输出 3-5 条要点，每条一行。"
 
@@ -37,10 +37,24 @@ class XteinkConfig(BaseModel):
     api_base: str = "https://api-prod.xteink.cn"
 
 
+_PROXY_SCHEMES = ("http://", "https://", "socks5://", "socks5h://", "socks4://")
+
+
 class ProxyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _check_scheme(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not v.startswith(_PROXY_SCHEMES):
+            raise ValueError(
+                f"proxy url must start with one of {_PROXY_SCHEMES}, got {v!r}"
+            )
+        return v
 
 
 class FetchConfig(BaseModel):
@@ -53,17 +67,26 @@ class FetchConfig(BaseModel):
 class Feed(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    url: str
+    id: str = Field(min_length=1)
+    url: str = Field(min_length=1)
     full_text: bool = True
     use_proxy: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def _check_url(cls, v: str) -> str:
+        # The feeds table lets a user blank the URL in one click; without this
+        # the save succeeds and every task using the feed fails at runtime.
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(f"feed url must start with http:// or https://, got {v!r}")
+        return v
 
 
 class Task(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    name: str
+    name: str = Field(min_length=1, max_length=60)
     feeds: list[str]
     schedule: str
     summarize: bool = False

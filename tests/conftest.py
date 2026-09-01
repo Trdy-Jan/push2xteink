@@ -1,3 +1,6 @@
+import shutil
+from pathlib import Path
+
 import pytest
 
 from push2xteink.models import (
@@ -57,3 +60,26 @@ def valid_config_dict() -> dict:
             }
         ],
     }
+
+
+WEB_FIXTURE = Path("tests/fixtures/config_valid.yaml")
+
+
+@pytest.fixture
+def web_env(tmp_path, monkeypatch):
+    """(config_path, db_path) for a web app; WEB_PASSWORD cleared."""
+    monkeypatch.delenv("WEB_PASSWORD", raising=False)
+    cfg = tmp_path / "config.yaml"
+    shutil.copy(WEB_FIXTURE, cfg)
+    return cfg, tmp_path / "state.db"
+
+
+@pytest.fixture
+def web_client(web_env):
+    from fastapi.testclient import TestClient
+
+    from push2xteink.web.app import create_app
+
+    cfg, db = web_env
+    with TestClient(create_app(cfg, db)) as c:
+        yield c

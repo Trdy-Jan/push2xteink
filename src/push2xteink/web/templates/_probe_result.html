@@ -1,0 +1,5 @@
+{% if ok %}
+<p class="ok">✓ 连接正常</p>
+{% else %}
+<p class="error">✗ {{ error or "连接失败" }}</p>
+{% endif %}
