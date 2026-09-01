@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}push2xteink{% endblock %}</title>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+           background: #fafafa; color: #1a1a1a; }
+    nav { display: flex; gap: 1rem; padding: .75rem 1.25rem; background: #1a1a1a; }
+    nav a { color: #eee; text-decoration: none; }
+    nav a:hover { color: #fff; text-decoration: underline; }
+    main { padding: 1.25rem; max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 1.35rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #ddd; }
+    .badge { display: inline-block; padding: .1rem .5rem; border-radius: .6rem;
+             font-size: .8rem; background: #e5e5e5; }
+    .badge-success { background: #d5f2dd; }
+    .badge-failed { background: #f7d4d4; }
+    .badge-skipped { background: #e5e5e5; }
+    button { font: inherit; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/">任务</a>
+    <a href="/feeds">源</a>
+    <a href="/runs">历史</a>
+    <a href="/settings">设置</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
