@@ -1,7 +1,6 @@
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
     CONFIG_PATH=/data/config.yaml \
     DB_PATH=/data/state.db \
     PORT=8080
@@ -17,8 +16,10 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-# Non-root. /data is a bind mount at runtime; the baked-in dir is owned by app
-# so a first run on an empty named volume is writable.
+# Non-root default. /data is a bind mount at runtime; the baked-in dir is owned
+# by app so a first run on an empty named volume is writable. NOTE: compose sets
+# `user: "${APP_UID}:${APP_GID}"`, which overrides this USER at runtime (so the
+# container runs as the host user and ./data stays host-editable).
 RUN useradd --system --uid 10001 --home /home/app --create-home app \
     && mkdir -p /data && chown app:app /data
 USER app

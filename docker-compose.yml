@@ -3,7 +3,9 @@ services:
     build: .
     image: push2xteink:local
     restart: unless-stopped
-    stop_grace_period: 150s          # P4 drain_timeout(120s) + 余量
+    init: true                       # tini: reap zombies + forward SIGTERM
+    stop_grace_period: 150s          # ~25s 优雅排空(web/app.py _WEB_DRAIN_TIMEOUT) + 余量
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
     ports:
       - "${PORT:-8080}:8080"
     environment:
