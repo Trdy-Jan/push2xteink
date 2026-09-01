@@ -16,8 +16,8 @@ from .state import State
 
 # Spec §10: a first `docker compose up` with no config.yaml must leave the user
 # a filled-in-able template, not a crashloop on "config file not found".
-# Mirrors the spec §4 example. Deliberately NOT loadable as-is: the placeholders
-# have to be replaced, and `serve` exits 2 until they are.
+# Mirrors the spec §4 example. It loads as-is (the container comes up serving it);
+# task runs just fail at the xteink upload step until real credentials are filled in.
 _SAMPLE_CONFIG = """\
 # push2xteink 配置文件
 # 修改后保存即可热更新（无需重启容器）；Web 界面读写的也是这个文件。

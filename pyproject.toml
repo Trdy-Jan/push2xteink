@@ -1,6 +1,10 @@
 [project]
 name = "push2xteink"
 version = "0.1.0"
+description = "自动把 RSS 新文章打包推送到 xteink 阅读器：抓取 / 可选 AI 摘要 / EPUB·TXT / 定时"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "push2xteink" }]
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.6",

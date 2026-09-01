@@ -1,0 +1,18 @@
+services:
+  push2xteink:
+    build: .
+    image: push2xteink:local
+    restart: unless-stopped
+    init: true                       # tini: reap zombies + forward SIGTERM
+    stop_grace_period: 150s          # ~25s 优雅排空(web/app.py _WEB_DRAIN_TIMEOUT) + 余量
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      TZ: "${TZ:-UTC}"
+      WEB_PASSWORD: "${WEB_PASSWORD:-}"
+      CONFIG_PATH: /data/config.yaml
+      DB_PATH: /data/state.db
+    volumes:
+      - ./data:/data
