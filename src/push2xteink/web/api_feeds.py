@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 
+from ..extract import extract_full_text
+from ..feeds import fetch_feed
 from ..models import Feed
 from ._common import apply_config_change, current_config
+
+_PROBE_TIMEOUT = 10.0
 
 router = APIRouter()
 
@@ -57,3 +61,33 @@ def delete_feed(request: Request, feed_id: str) -> Response:
 
     apply_config_change(request, mutate)
     return Response(status_code=204)
+
+
+@router.post("/api/feeds/{feed_id}/test")
+def test_feed(request: Request, feed_id: str) -> dict:
+    cfg = current_config(request)
+    feed = next((f for f in cfg.feeds if f.id == feed_id), None)
+    if feed is None:
+        raise HTTPException(status_code=404, detail=f"feed {feed_id!r} not found")
+    proxy_url = cfg.proxy.url if feed.use_proxy else None
+    try:
+        result = fetch_feed(feed, proxy_url=proxy_url, timeout=_PROBE_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001 - probe must not 500
+        return {"error": str(exc), "entries": []}
+    if result.error:
+        return {"error": result.error, "entries": []}
+
+    entries: list[dict] = []
+    for i, art in enumerate(result.articles[:5]):
+        extracted: bool | None = None
+        if i < 3:
+            try:
+                extracted = bool(
+                    extract_full_text(
+                        art.link, proxy_url=proxy_url, timeout=_PROBE_TIMEOUT
+                    )
+                )
+            except Exception:  # noqa: BLE001 - probe must not 500
+                extracted = False
+        entries.append({"title": art.title, "extracted": extracted})
+    return {"error": None, "entries": entries}

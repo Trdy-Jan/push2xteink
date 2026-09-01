@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Request
 
-from ..models import Config
-from ._common import MASK, apply_config_change, current_config
+from ..http import make_client
+from ..models import AIConfig, Config
+from ..summarize import Summarizer
+from ..xteink import XteinkClient
+from ._common import MASK, apply_config_change, current_config, get_db
 
 router = APIRouter()
 
@@ -59,3 +62,75 @@ def put_settings(request: Request, body: dict = Body(...)) -> dict:
 
     cfg = apply_config_change(request, mutate)
     return _settings_view(cfg)
+
+
+# --- test-connection probes: these handlers must never raise (never 500) ---
+
+_PROBE_TEXT = "测试连通性。"
+
+
+def _probe_provider(ai_cfg: AIConfig, proxy_url: str | None) -> dict:
+    summ: Summarizer | None = None
+    try:
+        summ = Summarizer(ai_cfg, proxy_url=proxy_url)
+        summ.summarize(_PROBE_TEXT)
+        return {"ok": True, "error": None}
+    except Exception as exc:  # noqa: BLE001 - probe must not 500
+        return {"ok": False, "error": str(exc)}
+    finally:
+        if summ is not None:
+            summ.close()
+
+
+@router.post("/api/test/ai")
+def test_ai(request: Request) -> dict:
+    cfg = current_config(request)
+    if cfg.ai is None:
+        return {
+            "primary": {"ok": False, "error": "ai not configured"},
+            "fallback": None,
+        }
+    proxy_url = cfg.proxy.url
+    base = {"fallback": None, "max_retries": 0}
+    primary_cfg = cfg.ai.model_copy(update=base)
+    result: dict = {
+        "primary": _probe_provider(primary_cfg, proxy_url),
+        "fallback": None,
+    }
+    if cfg.ai.fallback is not None:
+        fb_cfg = cfg.ai.model_copy(update={**base, "primary": cfg.ai.fallback})
+        result["fallback"] = _probe_provider(fb_cfg, proxy_url)
+    return result
+
+
+@router.post("/api/test/xteink")
+def test_xteink(request: Request) -> dict:
+    cfg = current_config(request)
+    client: XteinkClient | None = None
+    try:
+        client = XteinkClient(cfg.xteink, get_db(request))
+        client._access_token(force_refresh=True)
+        return {"ok": True, "error": None}
+    except Exception as exc:  # noqa: BLE001 - probe must not 500
+        return {"ok": False, "error": str(exc)}
+    finally:
+        if client is not None:
+            client.close()
+
+
+@router.post("/api/test/proxy")
+def test_proxy(request: Request) -> dict:
+    url = current_config(request).proxy.url
+    if not url:
+        return {"ok": False, "error": "no proxy configured"}
+    client = None
+    try:
+        client = make_client(proxy=url, timeout=10)
+        resp = client.head("https://www.example.com")
+        ok = 200 <= resp.status_code < 400
+        return {"ok": ok, "error": None if ok else f"HTTP {resp.status_code}"}
+    except Exception as exc:  # noqa: BLE001 - probe must not 500
+        return {"ok": False, "error": str(exc)}
+    finally:
+        if client is not None:
+            client.close()
