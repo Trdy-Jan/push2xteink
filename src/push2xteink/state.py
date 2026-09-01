@@ -170,6 +170,19 @@ class State:
             ).fetchone()
         return row is not None
 
+    def get_run(self, run_id: int) -> sqlite3.Row | None:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+
+    def last_run_for_task(self, task_id: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM runs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+
     def recent_runs(self, limit: int = 50) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(

@@ -24,7 +24,9 @@ def _auth_dep(creds: HTTPBasicCredentials | None = Depends(_basic)) -> None:
     pw = os.environ.get("WEB_PASSWORD")
     if not pw:
         return
-    if creds is None or not secrets.compare_digest(creds.password, pw):
+    if creds is None or not secrets.compare_digest(
+        creds.password.encode("utf-8"), pw.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=401,
             detail="unauthorized",

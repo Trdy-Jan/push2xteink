@@ -64,6 +64,13 @@ def apply_config_change(
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=_first_error(exc)) from exc
     write_config(path, new_config)
-    sched.reload(new_config)
+    if not sched.reload(new_config):
+        # Config is valid and now on disk, but the scheduler could not build a
+        # pipeline for it. Leave the token unadvanced so the ConfigWatcher keeps
+        # retrying, and surface the failure instead of a false 200.
+        raise HTTPException(
+            status_code=500,
+            detail="config saved but scheduler reload failed — check server logs",
+        )
     sched.prime_config_token(path)  # so the ConfigWatcher doesn't reload again
     return new_config

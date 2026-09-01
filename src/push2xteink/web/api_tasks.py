@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 
 from ..models import Task
@@ -10,19 +8,11 @@ from ._common import apply_config_change, current_config, get_db, get_scheduler
 router = APIRouter()
 
 
-def _runs_by_task(db) -> dict[str, Any]:
-    """Most recent run row per task_id."""
-    latest: dict[str, Any] = {}
-    for row in db.recent_runs(200):
-        latest.setdefault(row["task_id"], row)
-    return latest
-
-
-def _task_view(task: Task, sched, runs_by_task: dict[str, Any]) -> dict:
+def _task_view(task: Task, sched, db) -> dict:
     d = task.model_dump(mode="json")
     nrt = sched.next_run_time(task.id)
     d["next_run_time"] = nrt.isoformat() if nrt else None
-    row = runs_by_task.get(task.id)
+    row = db.last_run_for_task(task.id)
     d["last_run"] = (
         {
             "status": row["status"],
@@ -39,8 +29,8 @@ def _task_view(task: Task, sched, runs_by_task: dict[str, Any]) -> dict:
 @router.get("/api/tasks")
 def list_tasks(request: Request) -> list[dict]:
     sched = get_scheduler(request)
-    runs_by_task = _runs_by_task(get_db(request))
-    return [_task_view(t, sched, runs_by_task) for t in sched.config.tasks]
+    db = get_db(request)
+    return [_task_view(t, sched, db) for t in sched.config.tasks]
 
 
 @router.post("/api/tasks", status_code=201)
@@ -50,7 +40,7 @@ def create_task(request: Request, task: Task) -> dict:
 
     cfg = apply_config_change(request, mutate)
     created = next(t for t in cfg.tasks if t.id == task.id)
-    return _task_view(created, get_scheduler(request), _runs_by_task(get_db(request)))
+    return _task_view(created, get_scheduler(request), get_db(request))
 
 
 @router.put("/api/tasks/{task_id}")
@@ -67,7 +57,7 @@ def update_task(
 
     cfg = apply_config_change(request, mutate)
     updated = next(t for t in cfg.tasks if t.id == task_id)
-    return _task_view(updated, get_scheduler(request), _runs_by_task(get_db(request)))
+    return _task_view(updated, get_scheduler(request), get_db(request))
 
 
 @router.delete("/api/tasks/{task_id}", status_code=204)

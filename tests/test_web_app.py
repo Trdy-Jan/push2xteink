@@ -41,3 +41,14 @@ def test_basic_auth_enforced_when_password_set(tmp_path, monkeypatch):
         assert c.get("/").status_code == 401
         assert c.get("/", auth=("x", "wrong")).status_code == 401
         assert c.get("/", auth=("x", "s3cret")).status_code == 200
+        # API routes are guarded too
+        assert c.get("/api/tasks").status_code == 401
+        assert c.get("/api/tasks", auth=("x", "s3cret")).status_code == 200
+
+
+def test_basic_auth_non_ascii_password_is_401_not_500(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEB_PASSWORD", "s3cret")
+    cfg = tmp_path / "config.yaml"
+    shutil.copy(FIXTURE, cfg)
+    with TestClient(create_app(cfg, tmp_path / "s.db")) as c:
+        assert c.get("/", auth=("x", "wrong-üñî")).status_code == 401
