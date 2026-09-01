@@ -104,7 +104,6 @@ class Scheduler:
             args=[task_id],
             id=f"manual:{task_id}",
             replace_existing=True,
-            misfire_grace_time=60,
         )
 
     # --- config reload ---
@@ -138,7 +137,13 @@ class Scheduler:
                 logger.warning("config reload skipped (invalid): %s", exc)
                 self._last_bad_token = token
             return False
-        self.reload(new_config)
+        if not self.reload(new_config):
+            # Valid file, but the swap aborted (e.g. pipeline build failed).
+            # Don't advance _config_token, so a fix to the file is retried.
+            if token != self._last_bad_token:
+                logger.warning("config reload aborted (pipeline build failed)")
+                self._last_bad_token = token
+            return False
         self._config_token = token
         return True
 
@@ -215,11 +220,13 @@ class Scheduler:
             self._orphans.clear()
             self._safe_close(self._pipeline)
 
-    def reload(self, new_config: Config) -> None:
+    def reload(self, new_config: Config) -> bool:
+        """Swap in ``new_config``. Returns True on a successful swap, False if
+        the scheduler is not running or the new pipeline could not be built."""
         with self._reload_lock:
             if self._shutdown or not self._aps.running:
                 logger.warning("reload ignored: scheduler not running")
-                return
+                return False
             self._aps.pause()
             # pause() only suppresses NEW triggers. A job already being dispatched
             # by APScheduler could still call _run; it registers in _active_ids
@@ -239,7 +246,7 @@ class Scheduler:
                         "keeping current"
                     )
                     self._aps.resume()
-                    return
+                    return False
                 # Swap under the same lock the drain waited on, so no run can
                 # capture the old pipeline after this point.
                 self._pipeline = new_pipeline
@@ -258,3 +265,4 @@ class Scheduler:
                     "reload could not drain; deferring old pipeline close to shutdown"
                 )
                 self._orphans.append(old_pipeline)
+            return True

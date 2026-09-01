@@ -1,3 +1,4 @@
+import logging
 import shutil
 import threading
 import time
@@ -422,8 +423,51 @@ def test_maybe_reload_bad_config_keeps_running(tmp_path, caplog):
     s.prime_config_token(cfgfile)
     try:
         cfgfile.write_text("xteink: [unclosed\n", encoding="utf-8")
-        assert s.maybe_reload(cfgfile) is False
+        with caplog.at_level(logging.WARNING, logger="push2xteink.scheduler"):
+            assert s.maybe_reload(cfgfile) is False
+            warnings = [
+                r for r in caplog.records
+                if r.levelno == logging.WARNING
+                and ("invalid" in r.getMessage() or "reload" in r.getMessage())
+            ]
+            assert len(warnings) == 1
+            # same bad file again -> logged once per distinct bad token
+            assert s.maybe_reload(cfgfile) is False
+            warnings = [
+                r for r in caplog.records
+                if r.levelno == logging.WARNING
+                and ("invalid" in r.getMessage() or "reload" in r.getMessage())
+            ]
+            assert len(warnings) == 1
         assert s._aps.running                            # still up
+    finally:
+        s.shutdown()
+    st.close()
+
+
+def test_maybe_reload_does_not_advance_token_when_swap_aborts(tmp_path):
+    cfgfile = tmp_path / "c.yaml"
+    shutil.copy(FIXTURE, cfgfile)
+    st = State(tmp_path / "s.db")
+    calls = {"n": 0}
+
+    def factory(c, x):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("cannot build pipeline for this config")
+        return FakePipeline()
+
+    s = Scheduler(load_config(cfgfile), st, pipeline_factory=factory)
+    s.start()
+    s.prime_config_token(cfgfile)
+    try:
+        cfgfile.write_text(cfgfile.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        # valid YAML+schema, but the pipeline factory raises -> reload aborts
+        assert s.maybe_reload(cfgfile) is False
+        assert s._aps.running
+        # token NOT advanced: a later successful build retries the same file
+        calls["n"] = 0
+        assert s.maybe_reload(cfgfile) is True
     finally:
         s.shutdown()
     st.close()
