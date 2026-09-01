@@ -1,0 +1,16 @@
+services:
+  push2xteink:
+    build: .
+    image: push2xteink:local
+    restart: unless-stopped
+    stop_grace_period: 150s          # P4 drain_timeout(120s) + 余量
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      TZ: "${TZ:-UTC}"
+      WEB_PASSWORD: "${WEB_PASSWORD:-}"
+      CONFIG_PATH: /data/config.yaml
+      DB_PATH: /data/state.db
+    volumes:
+      - ./data:/data
