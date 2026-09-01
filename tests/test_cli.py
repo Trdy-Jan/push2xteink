@@ -1,9 +1,8 @@
 import shutil
 import sqlite3
-import threading
 from pathlib import Path
 
-import pytest
+from fastapi import FastAPI
 
 from push2xteink.cli import main
 from push2xteink.pipeline import RunOutcome
@@ -113,197 +112,69 @@ def test_list_still_works_without_subcommand_required(tmp_path, capsys):
     assert rc == 0
 
 
-class FakeSched:
-    instances = []
+class _RunRecorder:
+    """Stand-in for uvicorn.run: records how it was called, never blocks."""
 
-    def __init__(self, config, state, **kw):
-        self.config = config
-        self.state = state
-        self.started = False
-        self.shut = False
-        self.reloads = []
-        self.enabled_task_ids = ["brief"]
-        FakeSched.instances.append(self)
+    def __init__(self):
+        self.calls = []
 
-    def start(self):
-        self.started = True
-
-    def shutdown(self, **kw):
-        self.shut = True
-
-    def reload(self, cfg):
-        self.reloads.append(cfg)
+    def __call__(self, app, **kwargs):
+        self.calls.append((app, kwargs))
 
 
-@pytest.fixture
-def _fake_sched(monkeypatch):
-    FakeSched.instances.clear()
-    monkeypatch.setattr("push2xteink.cli.Scheduler", FakeSched)
-    return FakeSched
-
-
-def test_serve_starts_and_shuts_down(tmp_path, capsys, _fake_sched):
-    cfg = _cfg_file(tmp_path)
-    stop = threading.Event()
-    stop.set()
+def test_serve_runs_uvicorn_with_fastapi_app(tmp_path):
+    run = _RunRecorder()
     rc = main(
-        ["--config", str(cfg), "--db", str(tmp_path / "d" / "s.db"), "serve"],
-        _serve_stop=stop,
+        ["--config", str(_cfg_file(tmp_path)), "--db", str(tmp_path / "d" / "s.db"), "serve"],
+        _run=run,
     )
     assert rc == 0
-    inst = _fake_sched.instances[0]
-    assert inst.started and inst.shut
-    out = capsys.readouterr().out
-    assert "scheduler started: 1 task(s): brief" in out
+    assert len(run.calls) == 1
+    app, kwargs = run.calls[0]
+    assert isinstance(app, FastAPI)
+    assert kwargs["host"] == "0.0.0.0"
+    assert kwargs["port"] == 8080
 
 
-def test_bare_invocation_defaults_to_serve(tmp_path, capsys, _fake_sched):
-    cfg = _cfg_file(tmp_path)
-    stop = threading.Event()
-    stop.set()
-    rc = main(["--config", str(cfg), "--db", str(tmp_path / "s.db")], _serve_stop=stop)
+def test_serve_honours_port_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORT", "9123")
+    run = _RunRecorder()
+    rc = main(
+        ["--config", str(_cfg_file(tmp_path)), "--db", str(tmp_path / "s.db"), "serve"],
+        _run=run,
+    )
     assert rc == 0
-    assert _fake_sched.instances[0].started
-    assert _fake_sched.instances[0].shut
+    assert run.calls[0][1]["port"] == 9123
 
 
-def test_serve_bad_config_returns_2(tmp_path, capsys, _fake_sched):
+def test_bare_invocation_defaults_to_serve(tmp_path):
+    run = _RunRecorder()
+    rc = main(
+        ["--config", str(_cfg_file(tmp_path)), "--db", str(tmp_path / "s.db")],
+        _run=run,
+    )
+    assert rc == 0
+    assert len(run.calls) == 1
+    assert isinstance(run.calls[0][0], FastAPI)
+
+
+def test_bare_main_defaults_to_serve_via_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONFIG_PATH", str(_cfg_file(tmp_path)))
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "s.db"))
+    run = _RunRecorder()
+    rc = main([], _run=run)
+    assert rc == 0
+    assert len(run.calls) == 1
+
+
+def test_serve_bad_config_returns_2(tmp_path, capsys):
     bad = tmp_path / "bad.yaml"
     bad.write_text("x: [unclosed\n", encoding="utf-8")
-    stop = threading.Event()
-    stop.set()
+    run = _RunRecorder()
     rc = main(
         ["--config", str(bad), "--db", str(tmp_path / "s.db"), "serve"],
-        _serve_stop=stop,
+        _run=run,
     )
     assert rc == 2
     assert capsys.readouterr().err
-    assert not _fake_sched.instances
-
-
-def test_serve_unopenable_db_returns_2(tmp_path, capsys, monkeypatch, _fake_sched):
-    monkeypatch.setattr(
-        "push2xteink.cli.State",
-        lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("unable to open")),
-    )
-    stop = threading.Event()
-    stop.set()
-    rc = main(
-        ["--config", str(_cfg_file(tmp_path)), "--db", str(tmp_path / "s.db"), "serve"],
-        _serve_stop=stop,
-    )
-    assert rc == 2
-    assert "database error" in capsys.readouterr().err
-
-
-def test_serve_scheduler_init_failure_returns_2(tmp_path, capsys, monkeypatch):
-    class BoomSched:
-        def __init__(self, config, state, **kw):
-            raise RuntimeError("bad proxy")
-
-    monkeypatch.setattr("push2xteink.cli.Scheduler", BoomSched)
-    closed = {"n": 0}
-    real_state = __import__("push2xteink.state", fromlist=["State"]).State
-
-    def _tracking_state(*a, **k):
-        st = real_state(*a, **k)
-        orig_close = st.close
-
-        def close():
-            closed["n"] += 1
-            orig_close()
-
-        st.close = close
-        return st
-
-    monkeypatch.setattr("push2xteink.cli.State", _tracking_state)
-    stop = threading.Event()
-    stop.set()
-    rc = main(
-        ["--config", str(_cfg_file(tmp_path)), "--db", str(tmp_path / "s.db"), "serve"],
-        _serve_stop=stop,
-    )
-    assert rc == 2
-    assert "scheduler init failed" in capsys.readouterr().err
-    assert closed["n"] == 1  # state connection not leaked
-
-
-def test_bare_main_defaults_to_serve_via_env(tmp_path, capsys, monkeypatch, _fake_sched):
-    monkeypatch.setenv("CONFIG_PATH", str(_cfg_file(tmp_path)))
-    monkeypatch.setenv("DB_PATH", str(tmp_path / "s.db"))
-    stop = threading.Event()
-    stop.set()
-    rc = main([], _serve_stop=stop)
-    assert rc == 0
-    assert _fake_sched.instances[0].started and _fake_sched.instances[0].shut
-
-
-def test_serve_hot_reloads_on_config_change(tmp_path, capsys, monkeypatch, _fake_sched):
-    cfg = _cfg_file(tmp_path)
-
-    # A stop event whose wait() returns False the first time (run the loop body
-    # once) then True (exit). No signal handlers touched because _stop is passed.
-    calls = {"n": 0}
-    real_event = threading.Event()
-
-    class OneShotStop:
-        def wait(self, timeout=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                # mutate the config file so mtime changes
-                import os
-                import time
-
-                text = cfg.read_text(encoding="utf-8")
-                cfg.write_text(text + "\n# touched\n", encoding="utf-8")
-                past = time.time() + 5
-                os.utime(cfg, (past, past))
-                return False
-            return True
-
-        def set(self):
-            real_event.set()
-
-    rc = main(
-        ["--config", str(cfg), "--db", str(tmp_path / "s.db"), "serve"],
-        _serve_stop=OneShotStop(),
-    )
-    assert rc == 0
-    inst = _fake_sched.instances[0]
-    assert len(inst.reloads) == 1
-
-
-def test_serve_survives_reload_failure(tmp_path, capsys, monkeypatch, _fake_sched):
-    cfg = _cfg_file(tmp_path)
-
-    def boom(self, c):
-        raise RuntimeError("bad proxy.url")
-
-    monkeypatch.setattr(_fake_sched, "reload", boom)
-
-    calls = {"n": 0}
-
-    class OneShotStop:
-        def wait(self, timeout=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                import os
-                import time
-
-                text = cfg.read_text(encoding="utf-8")
-                cfg.write_text(text + "\n# touched\n", encoding="utf-8")
-                past = time.time() + 5
-                os.utime(cfg, (past, past))
-                return False
-            return True
-
-        def set(self):
-            pass
-
-    rc = main(
-        ["--config", str(cfg), "--db", str(tmp_path / "s.db"), "serve"],
-        _serve_stop=OneShotStop(),
-    )
-    assert rc == 0  # loop kept running, clean exit on stop
-    assert "reload failed" in capsys.readouterr().err
-    assert _fake_sched.instances[0].shut  # shutdown still ran
+    assert not run.calls  # never handed off to uvicorn
