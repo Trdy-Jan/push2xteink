@@ -27,7 +27,7 @@
       onclick="this.closest('form').schedule.value='0 * * * *'">每小时</button>
     <button type="button"
       onclick="this.closest('form').schedule.value='*/30 * * * *'">每 30 分钟</button>
-    <button type="button" hx-get="/api/cron/preview"
+    <button type="button" hx-get="/ui/cron-preview"
       hx-target="#cron-preview" hx-swap="innerHTML"
       hx-vals='js:{expr: document.querySelector("#task-editor [name=schedule]").value}'>
       预览

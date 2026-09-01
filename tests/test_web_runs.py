@@ -40,6 +40,9 @@ def test_rerun_unknown_404(web_client):
 def test_cron_preview_valid(web_client):
     j = web_client.get("/api/cron/preview", params={"expr": "0 7 * * *"}).json()
     assert j["valid"] is True and len(j["next"]) == 3 and j["error"] is None
+    # the 3 previewed fire times must be distinct and ascending
+    assert j["next"] == sorted(j["next"])
+    assert len(set(j["next"])) == 3
 
 
 def test_cron_preview_invalid(web_client):

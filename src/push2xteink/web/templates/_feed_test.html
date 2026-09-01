@@ -1,0 +1,17 @@
+{% if error %}
+<p class="error">拉取失败：{{ error }}</p>
+{% else %}
+<p>最新 {{ entries | length }} 条：</p>
+<ul>
+  {% for e in entries %}
+  <li>
+    {{ e.title }}
+    {% if e.extracted is not none %}
+    — 全文提取 <strong>{{ "✓" if e.extracted else "✗" }}</strong>
+    {% endif %}
+  </li>
+  {% else %}
+  <li>（无条目）</li>
+  {% endfor %}
+</ul>
+{% endif %}

@@ -14,8 +14,8 @@
   <tbody>
     {% for r in rows %}
     <tr>
-      <td>{{ r.started_at }}</td>
-      <td>{{ r.finished_at or "-" }}</td>
+      <td>{{ r.started_at | ts }}</td>
+      <td>{{ r.finished_at | ts }}</td>
       <td>{{ r.task_name }}</td>
       <td>{{ r.item_count if r.item_count is not none else "-" }}</td>
       <td>{{ r.file_name or "-" }}</td>
@@ -25,9 +25,11 @@
         <details><summary>展开</summary><pre>{{ r.message }}</pre></details>
         {% else %}-{% endif %}
       </td>
-      <td>
+      <td id="rerun-{{ r.id }}">
         {% if r.status == "failed" %}
-        <button hx-post="/api/runs/{{ r.id }}/rerun" hx-swap="none">重跑</button>
+        <button hx-post="/ui/runs/{{ r.id }}/rerun"
+                hx-target="#rerun-{{ r.id }}" hx-swap="beforeend"
+                hx-disabled-elt="this">重跑</button>
         {% endif %}
       </td>
     </tr>

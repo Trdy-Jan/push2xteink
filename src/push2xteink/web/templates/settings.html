@@ -17,7 +17,7 @@
              value="{{ s.xteink.password }}"></label>
     <label>API Base
       <input name="xteink.api_base" value="{{ s.xteink.api_base }}"></label>
-    <button type="button" hx-post="/api/test/xteink"
+    <button type="button" hx-post="/ui/test/xteink"
             hx-target="#test-xteink" hx-swap="innerHTML">测试连接</button>
     <div id="test-xteink"></div>
   </fieldset>
@@ -27,14 +27,14 @@
     <label>URL
       <input name="proxy.url" value="{{ s.proxy.url or '' }}"
              placeholder="http:// | socks5:// ..."></label>
-    <button type="button" hx-post="/api/test/proxy"
+    <button type="button" hx-post="/ui/test/proxy"
             hx-target="#test-proxy" hx-swap="innerHTML">测试连接</button>
     <div id="test-proxy"></div>
   </fieldset>
 
-  {% if s.ai %}
   <fieldset>
     <legend>ai</legend>
+    <p class="hint">留空则不启用 AI；填写 primary 三项即可启用摘要。</p>
     <label>primary base_url
       <input name="ai.primary.base_url"
              value="{{ s.ai.primary.base_url }}"></label>
@@ -69,12 +69,11 @@
         {% if s.ai.use_proxy %}checked{% endif %}> use_proxy
     </label>
     <div>
-      <button type="button" hx-post="/api/test/ai"
+      <button type="button" hx-post="/ui/test/ai"
               hx-target="#test-ai" hx-swap="innerHTML">测试连接</button>
     </div>
     <div id="test-ai"></div>
   </fieldset>
-  {% endif %}
 
   <fieldset>
     <legend>fetch</legend>

@@ -22,7 +22,7 @@
         <td>
           <button hx-post="/feeds/{{ f.id }}" hx-include="closest tr"
                   hx-target="#feed-table" hx-swap="outerHTML">保存</button>
-          <button hx-post="/api/feeds/{{ f.id }}/test"
+          <button hx-post="/ui/feeds/{{ f.id }}/test"
                   hx-target="#feed-test-{{ f.id }}" hx-swap="innerHTML">测试</button>
           <button hx-delete="/feeds/{{ f.id }}"
                   hx-target="#feed-table" hx-swap="outerHTML"

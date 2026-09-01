@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -42,12 +42,14 @@ def _cron_preview(expr: str) -> dict:
     now = datetime.now(timezone.utc)
     out: list[str] = []
     prev: datetime | None = None
+    cursor = now
     for _ in range(3):
-        nxt = trig.get_next_fire_time(prev, now)
+        nxt = trig.get_next_fire_time(prev, cursor)
         if nxt is None:
             break
         out.append(nxt.isoformat())
         prev = nxt
+        cursor = nxt + timedelta(seconds=1)
     return {"valid": True, "next": out, "error": None}
 
 

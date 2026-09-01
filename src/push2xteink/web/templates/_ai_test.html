@@ -1,0 +1,8 @@
+<p class="{{ 'ok' if primary.ok else 'error' }}">
+  primary: {{ "✓ 连接正常" if primary.ok else "✗ " ~ (primary.error or "连接失败") }}
+</p>
+{% if fallback %}
+<p class="{{ 'ok' if fallback.ok else 'error' }}">
+  fallback: {{ "✓ 连接正常" if fallback.ok else "✗ " ~ (fallback.error or "连接失败") }}
+</p>
+{% endif %}

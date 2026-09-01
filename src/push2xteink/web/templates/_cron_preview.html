@@ -1,0 +1,8 @@
+{% if error %}
+<p class="error">非法 cron 表达式：{{ error }}</p>
+{% else %}
+<p>接下来 3 次执行（UTC）：</p>
+<ul>
+  {% for t in next_runs %}<li>{{ t | ts }}</li>{% else %}<li>（无）</li>{% endfor %}
+</ul>
+{% endif %}

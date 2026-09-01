@@ -1,6 +1,6 @@
 <tr id="task-row-{{ t.id }}">
   <td>{{ t.name }}</td>
-  <td>{{ t.next_run_time or "-" }}</td>
+  <td>{{ t.next_run_time | ts }}</td>
   <td>
     <span class="badge {{ t.badge_class }}">{{ t.badge_text }}</span>
     {% if triggered|default(false) %}<span class="hint">已触发</span>{% endif %}
