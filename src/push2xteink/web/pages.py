@@ -5,7 +5,13 @@ import uuid
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ._common import apply_config_change, current_config, get_db, get_scheduler
+from .api_settings import _deep_update_keep_masked, _SECTIONS, _settings_view
+from ._common import (
+    apply_config_change,
+    current_config,
+    get_db,
+    get_scheduler,
+)
 from .app import templates
 
 router = APIRouter()
@@ -218,3 +224,171 @@ def task_delete(request: Request, task_id: str) -> HTMLResponse:
 
     apply_config_change(request, mutate)
     return HTMLResponse("")
+
+
+# --------------------------------------------------------------------------- #
+# feeds
+# --------------------------------------------------------------------------- #
+
+
+def _feeds_table(request: Request, *, error: str | None = None) -> HTMLResponse:
+    feeds = [f.model_dump(mode="json") for f in current_config(request).feeds]
+    return templates.TemplateResponse(
+        request, "_feed_table.html", {"feeds": feeds, "error": error}
+    )
+
+
+def _feeds_apply(request: Request, mutate) -> HTMLResponse:
+    try:
+        apply_config_change(request, mutate)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise
+        return _feeds_table(request, error=str(exc.detail))
+    return _feeds_table(request)
+
+
+@router.get("/feeds", response_class=HTMLResponse)
+def feeds_page(request: Request) -> HTMLResponse:
+    feeds = [f.model_dump(mode="json") for f in current_config(request).feeds]
+    return templates.TemplateResponse(request, "feeds.html", {"feeds": feeds})
+
+
+@router.post("/feeds", response_class=HTMLResponse)
+def feed_create(
+    request: Request,
+    url: str = Form(...),
+    full_text: bool = Form(True),
+    use_proxy: bool = Form(False),
+) -> HTMLResponse:
+    def mutate(raw: dict) -> None:
+        raw["feeds"].append(
+            {
+                "id": _gen_id("f"),
+                "url": url,
+                "full_text": full_text,
+                "use_proxy": use_proxy,
+            }
+        )
+
+    return _feeds_apply(request, mutate)
+
+
+@router.post("/feeds/{feed_id}", response_class=HTMLResponse)
+def feed_update(
+    request: Request,
+    feed_id: str,
+    url: str = Form(...),
+    full_text: bool = Form(False),
+    use_proxy: bool = Form(False),
+) -> HTMLResponse:
+    if feed_id not in {f.id for f in current_config(request).feeds}:
+        raise HTTPException(status_code=404, detail=f"feed {feed_id!r} not found")
+
+    def mutate(raw: dict) -> None:
+        for f in raw["feeds"]:
+            if f["id"] == feed_id:
+                f.update({"url": url, "full_text": full_text, "use_proxy": use_proxy})
+
+    return _feeds_apply(request, mutate)
+
+
+@router.delete("/feeds/{feed_id}", response_class=HTMLResponse)
+def feed_delete(request: Request, feed_id: str) -> HTMLResponse:
+    cfg = current_config(request)
+    if feed_id not in {f.id for f in cfg.feeds}:
+        raise HTTPException(status_code=404, detail=f"feed {feed_id!r} not found")
+    refs = [t.id for t in cfg.tasks if feed_id in t.feeds]
+    if refs:
+        return _feeds_table(
+            request, error=f"源 {feed_id!r} 被任务 {refs} 引用，无法删除（409）"
+        )
+
+    def mutate(raw: dict) -> None:
+        raw["feeds"] = [f for f in raw["feeds"] if f["id"] != feed_id]
+
+    return _feeds_apply(request, mutate)
+
+
+# --------------------------------------------------------------------------- #
+# runs
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/runs", response_class=HTMLResponse)
+def runs_page(request: Request) -> HTMLResponse:
+    db = get_db(request)
+    names = {t.id: t.name for t in current_config(request).tasks}
+    rows = []
+    for r in db.recent_runs(100):
+        d = dict(r)
+        d["task_name"] = names.get(d["task_id"], d["task_id"])
+        text, cls = _BADGE.get(d["status"], ("未运行", "badge"))
+        d["badge_text"], d["badge_class"] = text, cls
+        rows.append(d)
+    has_running = any(d["status"] == "running" for d in rows)
+    return templates.TemplateResponse(
+        request, "runs.html", {"rows": rows, "has_running": has_running}
+    )
+
+
+# --------------------------------------------------------------------------- #
+# settings
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {"s": _settings_view(current_config(request)), "banner": None},
+    )
+
+
+def _set_nested(root: dict, dotted: str, value) -> None:
+    parts = dotted.split(".")
+    d = root
+    for p in parts[:-1]:
+        nxt = d.get(p)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            d[p] = nxt
+        d = nxt
+    d[parts[-1]] = value
+
+
+@router.post("/settings", response_class=HTMLResponse)
+async def settings_save(request: Request) -> HTMLResponse:
+    form = await request.form()
+    body: dict = {}
+    for key, val in form.multi_items():
+        section = key.split(".", 1)[0]
+        if section not in _SECTIONS:
+            continue
+        _set_nested(body, key, None if val == "" else val)
+
+    def mutate(raw: dict) -> None:
+        for section in _SECTIONS:
+            incoming = body.get(section)
+            if not isinstance(incoming, dict):
+                continue
+            if not isinstance(raw.get(section), dict):
+                raw[section] = {}
+            _deep_update_keep_masked(raw[section], incoming)
+
+    banner, is_error = "已保存", False
+    try:
+        apply_config_change(request, mutate)
+    except HTTPException as exc:
+        banner, is_error = str(exc.detail), True
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "s": _settings_view(current_config(request)),
+            "banner": banner,
+            "is_error": is_error,
+        },
+        status_code=200,
+    )

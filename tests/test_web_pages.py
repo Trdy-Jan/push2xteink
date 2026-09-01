@@ -135,3 +135,128 @@ def test_delete_task_removes_from_config(web_client, web_env):
     assert r.status_code == 200
     cfg_path, _ = web_env
     assert load_config(cfg_path).tasks == []
+
+
+# --------------------------------------------------------------------------- #
+# Task 10 — feeds / runs / settings
+# --------------------------------------------------------------------------- #
+
+
+def test_feeds_page_lists_feeds(web_client):
+    r = web_client.get("/feeds")
+    assert r.status_code == 200
+    assert "hn" in r.text
+    assert "news.ycombinator.com/rss" in r.text
+    assert 'hx-post="/api/feeds/hn/test"' in r.text
+    assert 'hx-post="/feeds"' in r.text
+
+
+def test_post_feed_create_persists(web_client, web_env):
+    r = web_client.post(
+        "/feeds",
+        data={"url": "https://example.com/atom.xml", "full_text": "true"},
+    )
+    assert r.status_code == 200
+    cfg_path, _ = web_env
+    urls = [f.url for f in load_config(cfg_path).feeds]
+    assert "https://example.com/atom.xml" in urls
+
+
+def test_delete_referenced_feed_shows_conflict(web_client, web_env):
+    r = web_client.request("DELETE", "/feeds/hn")
+    assert r.status_code == 200
+    assert "brief" in r.text  # names the referencing task
+    cfg_path, _ = web_env
+    assert [f.id for f in load_config(cfg_path).feeds] == ["hn"]
+
+
+def test_delete_unreferenced_feed(web_client, web_env):
+    web_client.post("/feeds", data={"url": "https://x.example/rss"})
+    cfg_path, _ = web_env
+    new_id = [f.id for f in load_config(cfg_path).feeds if f.id != "hn"][0]
+    r = web_client.request("DELETE", f"/feeds/{new_id}")
+    assert r.status_code == 200
+    assert [f.id for f in load_config(cfg_path).feeds] == ["hn"]
+
+
+def test_runs_page_lists_history(web_client):
+    db = web_client.app.state.db_state
+    rid = db.start_run("brief")
+    db.finish_run(rid, status="failed", message="boom: something broke")
+    r = web_client.get("/runs")
+    assert r.status_code == 200
+    assert "早报" in r.text
+    assert "失败" in r.text
+    assert "boom: something broke" in r.text
+    assert f'hx-post="/api/runs/{rid}/rerun"' in r.text
+
+
+def test_runs_page_autorefreshes_while_running(web_client):
+    db = web_client.app.state.db_state
+    db.start_run("brief")
+    r = web_client.get("/runs")
+    assert 'hx-trigger="every 10s"' in r.text
+
+
+def test_settings_masks_secrets(web_client):
+    r = web_client.get("/settings")
+    assert r.status_code == 200
+    assert "********" in r.text
+    assert "secret" not in r.text  # xteink.password
+    assert "sk-test" not in r.text  # ai.primary.api_key
+    assert 'type="password"' in r.text
+    assert 'hx-post="/api/test/xteink"' in r.text
+    assert 'hx-post="/api/test/ai"' in r.text
+    assert 'hx-post="/api/test/proxy"' in r.text
+
+
+def test_post_settings_keeps_masked_password(web_client, web_env):
+    r = web_client.post(
+        "/settings",
+        data={
+            "xteink.username": "15900000000",
+            "xteink.password": "********",
+            "xteink.api_base": "https://api-prod.xteink.cn",
+            "ai.primary.base_url": "https://api.example.com/v1",
+            "ai.primary.api_key": "********",
+            "ai.primary.model": "gpt-4o-mini",
+            "ai.prompt": "x",
+            "ai.timeout_seconds": "60",
+            "ai.max_retries": "2",
+            "ai.qps": "1.0",
+            "fetch.timeout_seconds": "20",
+            "fetch.concurrency": "5",
+            "proxy.url": "",
+        },
+    )
+    assert r.status_code == 200
+    cfg_path, _ = web_env
+    cfg = load_config(cfg_path)
+    assert cfg.xteink.password == "secret"
+    assert cfg.xteink.username == "15900000000"
+    assert cfg.ai.primary.api_key == "sk-test"
+
+
+def test_post_settings_updates_password(web_client, web_env):
+    r = web_client.post(
+        "/settings",
+        data={
+            "xteink.username": "15800000000",
+            "xteink.password": "brandnew",
+            "xteink.api_base": "https://api-prod.xteink.cn",
+            "ai.primary.base_url": "https://api.example.com/v1",
+            "ai.primary.api_key": "sk-test",
+            "ai.primary.model": "gpt-4o-mini",
+            "ai.prompt": "x",
+            "ai.timeout_seconds": "60",
+            "ai.max_retries": "2",
+            "ai.qps": "1.0",
+            "fetch.timeout_seconds": "20",
+            "fetch.concurrency": "5",
+            "proxy.url": "",
+        },
+    )
+    assert r.status_code == 200
+    assert "已保存" in r.text
+    cfg_path, _ = web_env
+    assert load_config(cfg_path).xteink.password == "brandnew"

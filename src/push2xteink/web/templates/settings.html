@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}设置 - push2xteink{% endblock %}
+{% block content %}
+<h1>设置</h1>
+{% if banner %}
+<p class="{{ 'error' if is_error else 'ok' }}">{{ banner }}</p>
+{% endif %}
+
+<form hx-post="/settings" hx-target="main" hx-select="main" hx-swap="innerHTML">
+
+  <fieldset>
+    <legend>xteink</legend>
+    <label>用户名
+      <input name="xteink.username" value="{{ s.xteink.username }}"></label>
+    <label>密码
+      <input type="password" name="xteink.password"
+             value="{{ s.xteink.password }}"></label>
+    <label>API Base
+      <input name="xteink.api_base" value="{{ s.xteink.api_base }}"></label>
+    <button type="button" hx-post="/api/test/xteink"
+            hx-target="#test-xteink" hx-swap="innerHTML">测试连接</button>
+    <div id="test-xteink"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>proxy</legend>
+    <label>URL
+      <input name="proxy.url" value="{{ s.proxy.url or '' }}"
+             placeholder="http:// | socks5:// ..."></label>
+    <button type="button" hx-post="/api/test/proxy"
+            hx-target="#test-proxy" hx-swap="innerHTML">测试连接</button>
+    <div id="test-proxy"></div>
+  </fieldset>
+
+  {% if s.ai %}
+  <fieldset>
+    <legend>ai</legend>
+    <label>primary base_url
+      <input name="ai.primary.base_url"
+             value="{{ s.ai.primary.base_url }}"></label>
+    <label>primary api_key
+      <input type="password" name="ai.primary.api_key"
+             value="{{ s.ai.primary.api_key }}"></label>
+    <label>primary model
+      <input name="ai.primary.model" value="{{ s.ai.primary.model }}"></label>
+    {% if s.ai.fallback %}
+    <label>fallback base_url
+      <input name="ai.fallback.base_url"
+             value="{{ s.ai.fallback.base_url }}"></label>
+    <label>fallback api_key
+      <input type="password" name="ai.fallback.api_key"
+             value="{{ s.ai.fallback.api_key }}"></label>
+    <label>fallback model
+      <input name="ai.fallback.model" value="{{ s.ai.fallback.model }}"></label>
+    {% endif %}
+    <label>prompt
+      <textarea name="ai.prompt" rows="3">{{ s.ai.prompt }}</textarea></label>
+    <label>timeout_seconds
+      <input type="number" name="ai.timeout_seconds"
+             value="{{ s.ai.timeout_seconds }}"></label>
+    <label>max_retries
+      <input type="number" name="ai.max_retries"
+             value="{{ s.ai.max_retries }}"></label>
+    <label>qps
+      <input name="ai.qps" value="{{ s.ai.qps }}"></label>
+    <label style="display:inline">
+      <input type="hidden" name="ai.use_proxy" value="false">
+      <input type="checkbox" name="ai.use_proxy" value="true"
+        {% if s.ai.use_proxy %}checked{% endif %}> use_proxy
+    </label>
+    <div>
+      <button type="button" hx-post="/api/test/ai"
+              hx-target="#test-ai" hx-swap="innerHTML">测试连接</button>
+    </div>
+    <div id="test-ai"></div>
+  </fieldset>
+  {% endif %}
+
+  <fieldset>
+    <legend>fetch</legend>
+    <label>timeout_seconds
+      <input type="number" name="fetch.timeout_seconds"
+             value="{{ s.fetch.timeout_seconds }}"></label>
+    <label>concurrency
+      <input type="number" name="fetch.concurrency"
+             value="{{ s.fetch.concurrency }}"></label>
+  </fieldset>
+
+  <button type="submit">保存</button>
+</form>
+{% endblock %}

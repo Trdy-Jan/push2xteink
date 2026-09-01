@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}历史 - push2xteink{% endblock %}
+{% block content %}
+<h1>执行历史</h1>
+<table id="runs-table"
+  {% if has_running %}hx-get="/runs" hx-trigger="every 10s"
+  hx-select="#runs-table" hx-target="#runs-table" hx-swap="outerHTML"{% endif %}>
+  <thead>
+    <tr>
+      <th>开始</th><th>结束</th><th>任务</th><th>条目</th>
+      <th>文件</th><th>状态</th><th>message</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.started_at }}</td>
+      <td>{{ r.finished_at or "-" }}</td>
+      <td>{{ r.task_name }}</td>
+      <td>{{ r.item_count if r.item_count is not none else "-" }}</td>
+      <td>{{ r.file_name or "-" }}</td>
+      <td><span class="badge {{ r.badge_class }}">{{ r.badge_text }}</span></td>
+      <td>
+        {% if r.message %}
+        <details><summary>展开</summary><pre>{{ r.message }}</pre></details>
+        {% else %}-{% endif %}
+      </td>
+      <td>
+        {% if r.status == "failed" %}
+        <button hx-post="/api/runs/{{ r.id }}/rerun" hx-swap="none">重跑</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
