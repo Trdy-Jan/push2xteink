@@ -35,9 +35,14 @@ def mask_secret(v: object) -> str:
 
 
 def _first_error(exc: ValidationError) -> str:
-    errs = exc.errors()
+    """The first few `loc: msg` pairs, for a UI banner.
+
+    Never falls back to ``str(exc)``: that embeds ``input_value={...}``, i.e. the
+    submitted config including the xteink password and AI api_keys.
+    """
+    errs = exc.errors(include_url=False)
     if not errs:
-        return str(exc)
+        return "invalid config"
     parts = []
     for e in errs[:3]:
         loc = ".".join(str(x) for x in e.get("loc", ()))
