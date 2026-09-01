@@ -43,16 +43,20 @@
              value="{{ s.ai.primary.api_key }}"></label>
     <label>primary model
       <input name="ai.primary.model" value="{{ s.ai.primary.model }}"></label>
-    {% if s.ai.fallback %}
+    <label style="display:inline">
+      <input type="hidden" name="ai.fallback.enabled" value="false">
+      <input type="checkbox" name="ai.fallback.enabled" value="true"
+        {% if s.ai.fallback %}checked{% endif %}> 启用 fallback 备用模型
+    </label>
     <label>fallback base_url
       <input name="ai.fallback.base_url"
-             value="{{ s.ai.fallback.base_url }}"></label>
+             value="{{ (s.ai.fallback or {}).get('base_url', '') }}"></label>
     <label>fallback api_key
       <input type="password" name="ai.fallback.api_key"
-             value="{{ s.ai.fallback.api_key }}"></label>
+             value="{{ (s.ai.fallback or {}).get('api_key', '') }}"></label>
     <label>fallback model
-      <input name="ai.fallback.model" value="{{ s.ai.fallback.model }}"></label>
-    {% endif %}
+      <input name="ai.fallback.model"
+             value="{{ (s.ai.fallback or {}).get('model', '') }}"></label>
     <label>prompt
       <textarea name="ai.prompt" rows="3">{{ s.ai.prompt }}</textarea></label>
     <label>timeout_seconds

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -48,7 +48,13 @@ _AI_SCAFFOLD = {
 
 
 def _fmt_ts(value: object) -> str:
-    """Render an ISO timestamp (or datetime) as 'YYYY-MM-DD HH:MM' in UTC."""
+    """Render an ISO timestamp (or datetime) in the SERVER's timezone, labelled.
+
+    ``runs.started_at`` is stored naive-UTC while APScheduler's
+    ``next_run_time`` is machine-local — rendering both verbatim put two clocks
+    in one table. Normalize: assume UTC when naive, convert to local, and append
+    the zone name so the reading is never ambiguous.
+    """
     if value in (None, ""):
         return "-"
     if isinstance(value, str):
@@ -57,8 +63,14 @@ def _fmt_ts(value: object) -> str:
         except ValueError:
             return value
     if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d %H:%M")
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone().strftime("%Y-%m-%d %H:%M %Z")
     return str(value)
+
+
+def _server_tz_label() -> str:
+    return datetime.now().astimezone().strftime("%Z") or "本地时区"
 
 
 templates.env.filters["ts"] = _fmt_ts
@@ -271,20 +283,27 @@ def task_delete(request: Request, task_id: str) -> HTMLResponse:
 # --------------------------------------------------------------------------- #
 
 
-def _feeds_table(request: Request, *, error: str | None = None) -> HTMLResponse:
+def _feeds_table(
+    request: Request, *, error: str | None = None, submitted: dict | None = None
+) -> HTMLResponse:
     feeds = [f.model_dump(mode="json") for f in current_config(request).feeds]
+    if submitted:
+        # I8: on an error the row must show what the user typed, not the value
+        # still on disk, so they only have to fix the one bad field.
+        feeds = [{**f, **submitted} if f["id"] == submitted.get("id") else f
+                 for f in feeds]
     return templates.TemplateResponse(
         request, "_feed_table.html", {"feeds": feeds, "error": error}
     )
 
 
-def _feeds_apply(request: Request, mutate) -> HTMLResponse:
+def _feeds_apply(request: Request, mutate, submitted: dict | None = None) -> HTMLResponse:
     try:
         apply_config_change(request, mutate)
     except HTTPException as exc:
         if exc.status_code == 404:
             raise
-        return _feeds_table(request, error=str(exc.detail))
+        return _feeds_table(request, error=str(exc.detail), submitted=submitted)
     return _feeds_table(request)
 
 
@@ -325,12 +344,19 @@ def feed_update(
     if feed_id not in {f.id for f in current_config(request).feeds}:
         raise HTTPException(status_code=404, detail=f"feed {feed_id!r} not found")
 
+    row = {
+        "id": feed_id,
+        "url": url,
+        "full_text": full_text,
+        "use_proxy": use_proxy,
+    }
+
     def mutate(raw: dict) -> None:
         for f in raw["feeds"]:
             if f["id"] == feed_id:
                 f.update({"url": url, "full_text": full_text, "use_proxy": use_proxy})
 
-    return _feeds_apply(request, mutate)
+    return _feeds_apply(request, mutate, submitted=row)
 
 
 @router.delete("/feeds/{feed_id}", response_class=HTMLResponse)
@@ -366,10 +392,7 @@ def runs_page(request: Request) -> HTMLResponse:
         text, cls = _BADGE.get(d["status"], ("未运行", "badge"))
         d["badge_text"], d["badge_class"] = text, cls
         rows.append(d)
-    has_running = any(d["status"] == "running" for d in rows)
-    return templates.TemplateResponse(
-        request, "runs.html", {"rows": rows, "has_running": has_running}
-    )
+    return templates.TemplateResponse(request, "runs.html", {"rows": rows})
 
 
 # --------------------------------------------------------------------------- #
@@ -405,6 +428,36 @@ def _set_nested(root: dict, dotted: str, value) -> None:
     d[parts[-1]] = value
 
 
+def _pop_nested(root: dict, dotted: str, default=None):
+    parts = dotted.split(".")
+    d = root
+    for p in parts[:-1]:
+        d = d.get(p)
+        if not isinstance(d, dict):
+            return default
+    return d.pop(parts[-1], default)
+
+
+def _overlay(view: dict, body: dict) -> dict:
+    """Merge submitted form values over a rendered settings view.
+
+    On a validation error the page must come back with everything the user
+    typed, not the live config — otherwise one bad field throws away the rest of
+    the edit. Form values are strings, so "true"/"false" are coerced back to
+    bools for the checkbox templates.
+    """
+    out = dict(view)
+    for k, v in body.items():
+        if isinstance(v, dict):
+            base = out.get(k)
+            out[k] = _overlay(base if isinstance(base, dict) else {}, v)
+        elif v in ("true", "false"):
+            out[k] = v == "true"
+        else:
+            out[k] = v
+    return out
+
+
 @router.post("/settings", response_class=HTMLResponse)
 async def settings_save(request: Request) -> HTMLResponse:
     form = await request.form()
@@ -419,14 +472,21 @@ async def settings_save(request: Request) -> HTMLResponse:
             continue
         _set_nested(body, key, None if val == "" else val)
 
-    # The hidden ai.use_proxy field rides along on every save. Only treat the
-    # AI section as "being edited" when at least one primary field is filled,
-    # so a fresh install can save xteink/proxy/fetch without a spurious
-    # "ai.primary required" 400.
+    # ai.fallback.enabled is a UI-only switch (AIConfig forbids extras), so pull
+    # it out before the merge. Unchecked -> the whole fallback block is removed,
+    # which is the only way to drop it from the UI.
+    fb_enabled = _pop_nested(body, "ai.fallback.enabled") == "true"
+
+    # The hidden ai.use_proxy / ai.fallback.enabled fields ride along on every
+    # save. Only treat the AI section as "being edited" when at least one primary
+    # field is filled, so a fresh install can save xteink/proxy/fetch without a
+    # spurious "ai.primary required" 400.
     ai = body.get("ai")
+    ai_edited = False
     if isinstance(ai, dict):
         prim = ai.get("primary") or {}
-        if not any(prim.get(k) for k in ("base_url", "api_key", "model")):
+        ai_edited = any(prim.get(k) for k in ("base_url", "api_key", "model"))
+        if not ai_edited:
             body.pop("ai")
 
     def mutate(raw: dict) -> None:
@@ -437,17 +497,34 @@ async def settings_save(request: Request) -> HTMLResponse:
             if not isinstance(raw.get(section), dict):
                 raw[section] = {}
             _deep_update_keep_masked(raw[section], incoming)
+        if not ai_edited or not isinstance(raw.get("ai"), dict):
+            return
+        if fb_enabled:
+            fb = raw["ai"].get("fallback")
+            if not (
+                isinstance(fb, dict)
+                and all(fb.get(k) for k in ("base_url", "api_key", "model"))
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="启用 fallback 需要填写 base_url / api_key / model",
+                )
+        else:
+            raw["ai"].pop("fallback", None)
 
     banner, is_error = "已保存", False
+    view: dict | None = None
     try:
         apply_config_change(request, mutate)
     except HTTPException as exc:
         banner, is_error = str(exc.detail), True
+        # I8: re-render the user's submission, not the live config.
+        view = _overlay(_settings_view_scaffolded(request), body)
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
-            "s": _settings_view_scaffolded(request),
+            "s": view if view is not None else _settings_view_scaffolded(request),
             "banner": banner,
             "is_error": is_error,
         },
@@ -463,10 +540,19 @@ async def settings_save(request: Request) -> HTMLResponse:
 @router.get("/ui/cron-preview", response_class=HTMLResponse)
 def ui_cron_preview(request: Request, expr: str = "") -> HTMLResponse:
     res = _cron_preview(expr)
+    # APScheduler's day-of-week is 0=Monday, not the 0=Sunday of standard cron
+    # (spec §13). Only worth warning about when the user actually uses the field.
+    fields = expr.split()
+    dow_note = len(fields) == 5 and fields[4] != "*"
     return templates.TemplateResponse(
         request,
         "_cron_preview.html",
-        {"next_runs": res["next"], "error": None if res["valid"] else res["error"]},
+        {
+            "next_runs": res["next"],
+            "error": None if res["valid"] else res["error"],
+            "tz": _server_tz_label(),
+            "dow_note": dow_note,
+        },
     )
 
 

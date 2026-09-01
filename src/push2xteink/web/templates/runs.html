@@ -2,9 +2,12 @@
 {% block title %}历史 - push2xteink{% endblock %}
 {% block content %}
 <h1>执行历史</h1>
+{# Poll unconditionally: gating on has_running meant a run STARTED after page
+   load never armed the refresh, so the page sat stale until a manual reload.
+   One request per 10s is cheap. #}
 <table id="runs-table"
-  {% if has_running %}hx-get="/runs" hx-trigger="every 10s"
-  hx-select="#runs-table" hx-target="#runs-table" hx-swap="outerHTML"{% endif %}>
+  hx-get="/runs" hx-trigger="every 10s"
+  hx-select="#runs-table" hx-target="#runs-table" hx-swap="outerHTML">
   <thead>
     <tr>
       <th>开始</th><th>结束</th><th>任务</th><th>条目</th>

@@ -226,6 +226,13 @@ def test_runs_page_autorefreshes_while_running(web_client):
     assert 'hx-trigger="every 10s"' in r.text
 
 
+def test_runs_page_autorefreshes_even_with_no_running_run(web_client):
+    # Gating the poll on has_running meant a run started AFTER page load never
+    # armed the refresh; the page then sat stale until a manual reload.
+    r = web_client.get("/runs")
+    assert 'hx-trigger="every 10s"' in r.text
+
+
 def test_settings_masks_secrets(web_client):
     r = web_client.get("/settings")
     assert r.status_code == 200
@@ -433,3 +440,151 @@ def test_task_name_is_html_escaped(web_client):
     r = web_client.get("/")
     assert "<script>alert(1)</script>" not in r.text
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# I4 — one clock, self-labelled
+# --------------------------------------------------------------------------- #
+
+
+def test_fmt_ts_normalizes_naive_to_utc_then_local_and_labels_zone():
+    from datetime import datetime, timezone
+
+    from push2xteink.web.pages import _fmt_ts
+
+    naive = "2026-08-31T12:00:00"                       # DB rows are naive UTC
+    aware = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    # Same instant in, same string out — the two clocks are reconciled.
+    assert _fmt_ts(naive) == _fmt_ts(aware)
+    expected = aware.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    assert _fmt_ts(naive) == expected
+    # ...and the rendering names the zone it used.
+    assert expected.rsplit(" ", 1)[-1] == datetime.now().astimezone().strftime("%Z")
+
+
+def test_fmt_ts_handles_none_and_garbage():
+    from push2xteink.web.pages import _fmt_ts
+
+    assert _fmt_ts(None) == "-"
+    assert _fmt_ts("") == "-"
+    assert _fmt_ts("not-a-date") == "not-a-date"
+
+
+def test_cron_preview_labels_server_timezone_not_utc(web_client):
+    r = web_client.get("/ui/cron-preview", params={"expr": "0 7 * * *"})
+    assert r.status_code == 200
+    assert "（UTC）" not in r.text        # the old, wrong label
+    assert "服务器时区" in r.text
+
+
+def test_cron_preview_warns_about_apscheduler_dow(web_client):
+    r = web_client.get("/ui/cron-preview", params={"expr": "0 7 * * 0"})
+    assert "0=周一" in r.text
+    r = web_client.get("/ui/cron-preview", params={"expr": "0 7 * * *"})
+    assert "0=周一" not in r.text        # not noise when dow is unused
+
+
+# --------------------------------------------------------------------------- #
+# I8 — an error must not throw away the rest of the user's edit
+# --------------------------------------------------------------------------- #
+
+
+def test_settings_error_preserves_submitted_values(web_client, web_env):
+    r = web_client.post(
+        "/settings",
+        data={
+            "xteink.username": "MY-NEW-NAME",
+            "xteink.password": "********",
+            "xteink.api_base": "https://api-prod.xteink.cn",
+            "proxy.url": "not-a-proxy-url",          # <- the failing field
+            "fetch.timeout_seconds": "20",
+            "fetch.concurrency": "5",
+        },
+    )
+    assert r.status_code == 200
+    assert "proxy url" in r.text                     # the error is shown
+    assert "MY-NEW-NAME" in r.text                   # ...and the edit survives
+    assert "not-a-proxy-url" in r.text               # including the bad value
+    from push2xteink.config import load_config
+
+    cfg_path, _ = web_env
+    assert load_config(cfg_path).xteink.username == "15800000000"  # nothing saved
+
+
+def test_feed_row_error_preserves_submitted_url(web_client):
+    r = web_client.post(
+        "/feeds/hn", data={"url": "gopher://x", "full_text": "true", "use_proxy": "false"}
+    )
+    assert r.status_code == 200
+    assert "gopher://x" in r.text          # the row keeps what the user typed
+    assert "feed url must start with" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# I9 — ai.fallback is addable AND removable from the settings page
+# --------------------------------------------------------------------------- #
+
+_AI_PRIMARY = {
+    "ai.primary.base_url": "https://api.example.com/v1",
+    "ai.primary.api_key": "********",
+    "ai.primary.model": "gpt-4o-mini",
+    "ai.prompt": "p",
+    "ai.timeout_seconds": "60",
+    "ai.max_retries": "2",
+    "ai.qps": "1.0",
+    "ai.use_proxy": "false",
+}
+
+
+def test_settings_page_always_renders_fallback_fields(web_client):
+    r = web_client.get("/settings")
+    assert 'name="ai.fallback.base_url"' in r.text
+    assert 'name="ai.fallback.enabled"' in r.text
+
+
+def test_settings_can_add_then_remove_ai_fallback(web_client, web_env):
+    from push2xteink.config import load_config
+
+    cfg_path, _ = web_env
+    assert load_config(cfg_path).ai.fallback is None
+
+    r = web_client.post(
+        "/settings",
+        data={
+            **_AI_PRIMARY,
+            "ai.fallback.enabled": "true",
+            "ai.fallback.base_url": "https://backup.example/v1",
+            "ai.fallback.api_key": "sk-backup",
+            "ai.fallback.model": "claude-3-5-haiku",
+        },
+    )
+    assert r.status_code == 200 and "已保存" in r.text
+    fb = load_config(cfg_path).ai.fallback
+    assert fb is not None and fb.model == "claude-3-5-haiku"
+
+    # unchecking the box removes the whole block
+    r = web_client.post(
+        "/settings",
+        data={
+            **_AI_PRIMARY,
+            "ai.fallback.enabled": "false",
+            "ai.fallback.base_url": "https://backup.example/v1",
+            "ai.fallback.api_key": "********",
+            "ai.fallback.model": "claude-3-5-haiku",
+        },
+    )
+    assert r.status_code == 200 and "已保存" in r.text
+    assert load_config(cfg_path).ai.fallback is None
+
+
+def test_settings_fallback_enabled_but_incomplete_is_an_error(web_client, web_env):
+    from push2xteink.config import load_config
+
+    cfg_path, _ = web_env
+    r = web_client.post(
+        "/settings",
+        data={**_AI_PRIMARY, "ai.fallback.enabled": "true", "ai.fallback.model": "m"},
+    )
+    assert r.status_code == 200
+    assert "启用 fallback" in r.text
+    assert load_config(cfg_path).ai.fallback is None
