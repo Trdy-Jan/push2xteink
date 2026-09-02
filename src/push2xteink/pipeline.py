@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .builders import BuildError, build_epub, build_txt, html_to_text, safe_segment
+from .builders.htmlclean import apply_image_map, normalize_html
 from .extract import apply_full_text
+from .images import download_images
 from .feeds import fetch_feed, select_new_articles
 from .models import Article, Config, Feed, Task
 from .state import State
@@ -148,6 +150,11 @@ class Pipeline:
         workers = max(1, self._config.fetch.concurrency)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             articles = list(pool.map(do_extract, articles))
+        want_images = task.format == "epub"
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            articles = list(
+                pool.map(lambda a: self._clean_article(a, fetch_images=want_images), articles)
+            )
 
         if task.summarize:
             if self._summarizer is None:
@@ -164,6 +171,25 @@ class Pipeline:
                     except SummarizeError as exc:
                         warnings.append(f"summary failed for {article.link}: {exc}")
         return articles
+
+    def _clean_article(self, article: Article, *, fetch_images: bool) -> Article:
+        """清洗正文 HTML（保证合法 XHTML）；EPUB 任务还会下载图片内嵌。
+        In-place mutation 与本文件其它 _prepare 步骤一致：每次运行现取的 Article，
+        无别名，Article 未 frozen。"""
+        clean = normalize_html(article.content_html, base_url=article.link)
+        images: list = []
+        url_map: dict[str, str] = {}
+        if fetch_images and clean.image_urls:
+            feed = self._feed(article.feed_id)
+            images, url_map = download_images(
+                clean.image_urls,
+                proxy_url=self._proxy_for(feed),
+                timeout=self._config.fetch.timeout_seconds,
+                referer=article.link or None,
+            )
+        article.content_html = apply_image_map(clean.html, url_map)
+        article.images = images
+        return article
 
     # --- step 5: build file ---
     def _same_day_success(self, task_id: str, now: datetime) -> bool:

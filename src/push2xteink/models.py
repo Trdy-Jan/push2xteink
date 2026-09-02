@@ -142,6 +142,14 @@ class Config(BaseModel):
         return self
 
 
+class EmbeddedImage(BaseModel):
+    """一张已下载、待写入 EPUB 的图片。"""
+
+    filename: str  # EPUB 内的路径，如 "img/<hash>.jpg"
+    media_type: str  # 如 "image/jpeg"
+    data: bytes
+
+
 class Article(BaseModel):
     feed_id: str
     guid: str
@@ -153,3 +161,4 @@ class Article(BaseModel):
     content_html: str = ""
     content_is_full_text: bool = False
     summary: str | None = None
+    images: list[EmbeddedImage] = Field(default_factory=list)

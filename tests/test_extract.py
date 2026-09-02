@@ -16,8 +16,20 @@ def test_extracts_long_article():
     )
     out = extract_full_text("https://site.example/post")
     assert out is not None
-    assert out.startswith("<p>")
-    assert "<nav" not in out and "<script" not in out
+    assert "<p>" in out
+    assert "<nav" not in out and "<script" not in out and "<footer" not in out
+
+
+@respx.mock
+def test_keeps_images_with_absolute_src():
+    respx.get("https://site.example/post").mock(
+        return_value=httpx.Response(
+            200, text=(FIX / "article_with_image.html").read_text(encoding="utf-8")
+        )
+    )
+    out = extract_full_text("https://site.example/post")
+    assert out is not None
+    assert '<img src="https://site.example/media/diagram.png"' in out
 
 
 @respx.mock

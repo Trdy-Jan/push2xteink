@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Article With A Picture</title></head>
+<body>
+  <nav><a href="/">Home</a></nav>
+  <article>
+    <h1>Article With A Picture</h1>
+    <p>This article carries an illustration in the middle of the body. The surrounding prose has to be long enough that the extractor keeps the whole block rather than discarding it as boilerplate, so here is a paragraph that rambles on for a while about nothing in particular.</p>
+    <figure>
+      <img src="/media/diagram.png" alt="an explanatory diagram">
+      <figcaption>Figure 1. A diagram that explains the thing.</figcaption>
+    </figure>
+    <p>After the figure the article continues with more discussion, again padded out so that the total text comfortably clears any minimum length threshold the extraction step might impose on candidate content blocks.</p>
+    <p>A third paragraph rounds things off with a summary of what the picture was supposed to show and why it mattered to the argument being made in the piece.</p>
+  </article>
+</body>
+</html>

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from html import escape
-
 import httpx
 import trafilatura
 
+from .builders.common import html_to_text
+from .builders.htmlclean import normalize_html
 from .http import make_client
 from .models import Article
 
@@ -27,15 +27,24 @@ def extract_full_text(
         return None
 
     try:
-        text = trafilatura.extract(
-            html, include_comments=False, include_tables=False, url=url or None
+        extracted = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=True,
+            include_images=True,
+            include_formatting=True,
+            output_format="html",
+            url=url or None,
         )
     except Exception:
         return None
-    if not text or len(text) < min_chars:
+    if not extracted:
         return None
-    paras = [escape(p.strip()) for p in text.split("\n") if p.strip()]
-    return "".join(f"<p>{p}</p>" for p in paras)
+
+    clean = normalize_html(extracted, base_url=url)
+    if not clean.html or len(html_to_text(clean.html)) < min_chars:
+        return None
+    return clean.html
 
 
 def apply_full_text(
