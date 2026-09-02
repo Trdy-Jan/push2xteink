@@ -45,8 +45,8 @@
   state.db ◄──────► │  (SQLite: seen_items / runs)     │
                     └─────────────────────────────────┘
                              │
-                             ▼  三步上传
-                    api-prod.xteink.cn → 阿里云 OSS → callback
+                             ▼  四步上传
+                    签名 → 阿里云 OSS → callback → device/tasks
                              │
                              ▼
                     绑定的阅读器（阅星曈 X4）
@@ -250,7 +250,7 @@ resp: {"access_token": "...", "refresh_token": "...", "expires_in": <秒>, ...}
 - 后续所有 api-prod 请求头：`Authorization: Bearer <access_token>`。
 - 任一 api-prod 请求返回 401 → 清除缓存 token，重新登录一次并重试该请求；再失败则抛错。
 
-### 7.2 三步上传
+### 7.2 上传（四步：签名 → OSS → 回调 → 推送到设备）
 
 ```
 步骤 A — 申请签名
@@ -297,12 +297,31 @@ body(JSON): {
   "content_type": "application/epub+zip"
 }
 resp: {"success": true, "record_id": "...", "download_url": "...", "size_mb": ...}
+
+步骤 D — 推送到设备（**必需**）
+GET /api/v1/device/binding
+  → resp.data[]，取 selected=true 的一项（否则取第一项）的 device_id
+POST /api/v1/device/tasks
+body(JSON): {
+  "device_id": <上面的 device_id>,
+  "file_url": <signature 的 download_url，或 {host}/{key} 拼接>,
+  "save_path": "/Pushed Books/<filename>",
+  "points_source": "playmethod",
+  "func_code": "h5-file-upload"
+}
+resp 201: {"success": true, "task": {"task_id": "...", "status": "processing",
+           "task_type": <服务端按文件类型自动选：txt→txt_encoding_fix，epub→epub_xtg_push>, ...}}
 ```
 
-抓包确认：callback 之后没有其它请求；上传到 `uploads/book` 后文件即自动同步到绑定阅读器，无需显式「发送到设备」调用。
+**步骤 A–C 只是把文件暂存到 OSS，不做步骤 D 的话文件不会进账号、也不会同步到阅读器**
+（早期抓包漏了这一步，导致「上传成功但云端/设备都收不到」）。任务完成后会得到
+`book_content_id`，再由手机 App 经蓝牙同步到 X4。
 
-设备信息（`GET /api/v1/device/binding` 可查，当前实现不需要主动调用）：
-绑定设备 `阅星曈 X4`，480×800，binding id `836d59b7-9263-44bd-aba2-04fd786d2eb1`。
+设备信息（`GET /api/v1/device/binding`）：
+绑定设备 `阅星曈 X4`，480×800，binding id `836d59b7-9263-44bd-aba2-04fd786d2eb1`，
+device_id `10285164_7C_E8_B1_9C_F0_6C`。
+注意：`GET /api/v1/device/tasks` 列表接口在账号存在 `txt_encoding_fix` 类型任务时会 500
+（服务端自身的枚举缺失 bug），只能带 `?device_id=&status=` 过滤查询。
 
 ### 7.3 错误处理
 
