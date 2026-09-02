@@ -7,7 +7,7 @@ from pathlib import Path
 from ebooklib import epub
 
 from ..models import Article
-from .common import BuildError, chapter_body_html, format_published, safe_filename
+from .common import BuildError, format_published, safe_filename, summary_paragraphs
 
 _MIN_BYTES = 256
 _CSS_NAME = "style/main.css"
@@ -39,6 +39,9 @@ td, th { border: 1px solid #999; padding: 0.2em 0.4em; }
 """
 
 
+_DIGEST_FILE = "summary.xhtml"
+
+
 def _chapter_html(article: Article) -> str:
     meta_bits = [b for b in (
         escape(article.source_title or ""),
@@ -48,9 +51,25 @@ def _chapter_html(article: Article) -> str:
     inner = (
         f"<h1>{escape(article.title)}</h1>"
         f'<p class="meta">{" · ".join(meta_bits)}</p>'
-        f"{chapter_body_html(article)}"
+        f"{article.content_html}"
     )
     return _XHTML.format(title=escape(article.title), body=inner)
+
+
+def _has_summary(article: Article) -> bool:
+    return bool(article.summary and article.summary.strip())
+
+
+def _digest_html(articles: list[Article], chapter_names: list[str]) -> str:
+    blocks = ["<h1>AI 总结</h1>"]
+    for article, name in zip(articles, chapter_names):
+        if not _has_summary(article):
+            continue
+        blocks.append(
+            f'<h2><a href="{name}">{escape(article.title)}</a></h2>'
+            f"{summary_paragraphs(article.summary)}"
+        )
+    return _XHTML.format(title="AI 总结", body="".join(blocks))
 
 
 def _add_images(book: epub.EpubBook, articles: list[Article]) -> None:
@@ -85,10 +104,11 @@ def build_epub(title: str, articles: list[Article], *, out_dir: Path) -> Path:
     book.add_item(css)
 
     chapters: list[epub.EpubHtml] = []
+    chapter_names = [f"ch{i:03d}.xhtml" for i in range(len(articles))]
     for i, article in enumerate(articles):
         ch = epub.EpubHtml(
             title=article.title or f"章节 {i + 1}",
-            file_name=f"ch{i:03d}.xhtml",
+            file_name=chapter_names[i],
             lang="zh-CN",
         )
         ch.content = _chapter_html(article)
@@ -98,10 +118,18 @@ def build_epub(title: str, articles: list[Article], *, out_dir: Path) -> Path:
 
     _add_images(book, articles)
 
-    book.toc = tuple(chapters)
+    lead: list[epub.EpubHtml] = []
+    if any(_has_summary(a) for a in articles):
+        digest = epub.EpubHtml(title="AI 总结", file_name=_DIGEST_FILE, lang="zh-CN")
+        digest.content = _digest_html(articles, chapter_names)
+        digest.add_item(css)
+        book.add_item(digest)
+        lead.append(digest)
+
+    book.toc = tuple(lead + chapters)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = ["nav", *chapters]
+    book.spine = ["nav", *lead, *chapters]
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

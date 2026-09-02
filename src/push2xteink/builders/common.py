@@ -5,8 +5,6 @@ from datetime import datetime, timezone
 from html import escape, unescape
 from html.parser import HTMLParser
 
-from ..models import Article
-
 _ILLEGAL = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
 _WS = re.compile(r"\s+")
 _MAX_STEM = 120
@@ -45,9 +43,10 @@ def format_published(dt: datetime | None) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
-def _summary_html(summary: str) -> str:
+def summary_paragraphs(summary: str) -> str:
+    """把 AI 总结的每一非空行渲染成一个 <p>（不套 <div>，X4 不认 div 套娃）。"""
     lines = [escape(ln.strip()) for ln in summary.splitlines() if ln.strip()]
-    return "<div>" + "".join(f"<p>{ln}</p>" for ln in lines) + "</div>"
+    return "".join(f"<p>{ln}</p>" for ln in lines)
 
 
 class _Stripper(HTMLParser):
@@ -89,7 +88,3 @@ def html_to_text(html: str) -> str:
     return unescape(p.text())
 
 
-def chapter_body_html(article: Article) -> str:
-    if article.summary and article.summary.strip():
-        return _summary_html(article.summary) + "<hr/>" + article.content_html
-    return article.content_html

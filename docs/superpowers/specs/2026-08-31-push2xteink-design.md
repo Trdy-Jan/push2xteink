@@ -207,9 +207,11 @@ token 缓存放 `kv` 表（`xteink_access_token` + `xteink_token_obtained_at`）
    对每个 item 调 ai.primary（遵守 ai.qps 限流、timeout、max_retries）
      异常/超时耗尽重试 → 若配置了 ai.fallback，用 fallback 再试一轮
      仍失败 → 该条跳过总结，记 run 告警
-   章节正文结构：
-     [AI 摘要段落] + <hr/> + [正文 HTML]
-   summarize=false → 章节只有正文
+   章节结构：
+     EPUB → 有任一条带总结时，正文章节前插入一章「AI 总结」，逐条列出
+            "文章标题（链到对应正文章节） + 摘要要点"；正文章节只含正文 HTML
+     TXT  → 每条正文前置 [摘要段落]
+   summarize=false / 全部无总结 → 无「AI 总结」章，章节只有正文
 
 5. 生成文件
    标题：f"{task.name}_{YYYYMMDD}"（同日同任务重复执行追加 _{HHMMSS}）
