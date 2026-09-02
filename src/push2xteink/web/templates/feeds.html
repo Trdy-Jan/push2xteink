@@ -6,11 +6,11 @@
 <form class="toolbar" hx-post="/feeds" hx-target="#feed-table" hx-swap="outerHTML"
       hx-on::after-request="if(event.detail.successful) this.reset()">
   <input name="url" placeholder="RSS URL" required>
-  <label style="display:inline">
+  <label class="check-inline">
     <input type="hidden" name="full_text" value="false">
     <input type="checkbox" name="full_text" value="true" checked> 全文提取
   </label>
-  <label style="display:inline">
+  <label class="check-inline">
     <input type="hidden" name="use_proxy" value="false">
     <input type="checkbox" name="use_proxy" value="true"> 走代理
   </label>

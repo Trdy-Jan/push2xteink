@@ -1,5 +1,6 @@
 <div id="feed-table">
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <div class="table-wrap">
   <table>
     <thead>
       <tr><th>id</th><th>URL</th><th>全文</th><th>代理</th><th>操作</th></tr>
@@ -34,4 +35,5 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>

@@ -6,5 +6,7 @@
   <button hx-get="/tasks/new" hx-target="#task-form" hx-swap="innerHTML">新建任务</button>
 </div>
 <div id="task-form"></div>
+<div class="table-wrap">
 {% include "_task_table.html" %}
+</div>
 {% endblock %}

@@ -4,42 +4,185 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}push2xteink{% endblock %}</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
   <script src="/static/htmx.min.js"></script>
   <style>
-    :root { color-scheme: light dark; }
-    body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-           background: #fafafa; color: #1a1a1a; }
-    nav { display: flex; gap: 1rem; padding: .75rem 1.25rem; background: #1a1a1a; }
-    nav a { color: #eee; text-decoration: none; }
-    nav a:hover { color: #fff; text-decoration: underline; }
-    main { padding: 1.25rem; max-width: 960px; margin: 0 auto; }
-    h1 { font-size: 1.35rem; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #ddd; }
-    .badge { display: inline-block; padding: .1rem .5rem; border-radius: .6rem;
-             font-size: .8rem; background: #e5e5e5; }
-    .badge-success { background: #d5f2dd; color: #14532d; }
-    .badge-failed { background: #f7d4d4; color: #7f1d1d; }
-    .badge-skipped { background: #e5e5e5; color: #444; }
-    .badge-running { background: #d5e4f7; color: #1e3a8a; }
-    button { font: inherit; cursor: pointer; }
-    fieldset { margin: .75rem 0; border: 1px solid #ddd; border-radius: .3rem; }
-    label { display: block; margin: .35rem 0; }
-    input, select, textarea { font: inherit; }
-    .error { color: #7f1d1d; background: #f7d4d4; padding: .4rem .6rem; border-radius: .3rem; }
-    .ok { color: #14532d; background: #d5f2dd; padding: .4rem .6rem; border-radius: .3rem; }
-    .hint { color: #1e3a8a; margin-left: .4rem; font-size: .85rem; }
-    .toolbar { margin: .75rem 0; }
+    :root {
+      --pico-font-size: 100%;
+      --pico-border-radius: .5rem;
+      --pico-spacing: 1rem;
+      --pico-form-element-spacing-vertical: .55rem;
+      --pico-form-element-spacing-horizontal: .8rem;
+      --nav-bg: #1b2330;
+      --nav-fg: #c9d3e0;
+      --nav-fg-active: #fff;
+    }
+
+    body { background: var(--pico-background-color); }
+
+    /* ---- top navigation bar ---- */
+    .app-header {
+      background: var(--nav-bg);
+      border-bottom: 1px solid rgba(255, 255, 255, .06);
+    }
+    .app-header > .container {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      padding-top: .7rem;
+      padding-bottom: .7rem;
+    }
+    .app-header .brand {
+      font-weight: 700;
+      letter-spacing: .01em;
+      color: #fff;
+    }
+    .app-header nav {
+      display: flex;
+      gap: .35rem;
+      flex-wrap: wrap;
+    }
+    .app-header nav a {
+      color: var(--nav-fg);
+      text-decoration: none;
+      padding: .3rem .7rem;
+      border-radius: var(--pico-border-radius);
+      font-weight: 500;
+      transition: background .15s, color .15s;
+    }
+    .app-header nav a:hover {
+      color: var(--nav-fg-active);
+      background: rgba(255, 255, 255, .07);
+    }
+    .app-header nav a.active {
+      color: var(--nav-fg-active);
+      background: rgba(255, 255, 255, .14);
+    }
+
+    main.container { padding-top: 2rem; padding-bottom: 4rem; }
+    h1 { margin-bottom: 1.25rem; }
+
+    .table-wrap { overflow-x: auto; }
+    .table-wrap table { min-width: 640px; }
+
+    /* ---- tables ---- */
+    table { font-size: .925rem; }
+    th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; opacity: .7; }
+    td, th { padding: .55rem .7rem; vertical-align: middle; }
+    tbody tr:hover > td { background: var(--pico-card-sectioning-background-color); }
+
+    /* ---- inline action buttons in tables / toolbars ---- */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      align-items: center;
+      margin: 1rem 0;
+    }
+    .toolbar > * { margin: 0; }
+    .toolbar button, .toolbar [type="submit"], .toolbar [type="button"] { width: auto; }
+
+    td button, main fieldset button[type="button"], .toolbar button[type="button"] {
+      width: auto;
+      display: inline-block;
+      margin: .1rem .2rem .1rem 0;
+      padding: .3rem .7rem;
+      font-size: .85rem;
+      --pico-background-color: var(--pico-secondary-background);
+      --pico-border-color: var(--pico-secondary-background);
+      --pico-color: var(--pico-secondary-inverse);
+    }
+    td button:hover, main fieldset button[type="button"]:hover, .toolbar button[type="button"]:hover {
+      --pico-background-color: var(--pico-secondary-hover-background);
+      --pico-border-color: var(--pico-secondary-hover-background);
+    }
+
+    /* ---- status badges (Pico has no badge component) ---- */
+    .badge {
+      display: inline-block;
+      padding: .15rem .55rem;
+      border-radius: 1rem;
+      font-size: .78rem;
+      font-weight: 600;
+      line-height: 1.4;
+      background: var(--pico-secondary-background);
+      color: var(--pico-secondary-inverse);
+      white-space: nowrap;
+    }
+    .badge-success { background: #d1f0dc; color: #12512c; }
+    .badge-failed  { background: #f8d7d7; color: #7a1a1a; }
+    .badge-skipped { background: #e6e6e9; color: #4a4a52; }
+    .badge-running { background: #d5e3fb; color: #1c3d86; }
+    @media (prefers-color-scheme: dark) {
+      .badge-success { background: rgba(46, 160, 87, .22); color: #7ee2a1; }
+      .badge-failed  { background: rgba(220, 76, 76, .22); color: #ff9c9c; }
+      .badge-skipped { background: rgba(160, 160, 170, .2); color: #c2c2cc; }
+      .badge-running { background: rgba(66, 122, 232, .24); color: #9fc0ff; }
+    }
+
+    /* ---- inline feedback messages ---- */
+    .error, .ok {
+      display: block;
+      padding: .5rem .75rem;
+      border-radius: var(--pico-border-radius);
+      margin: .5rem 0;
+      font-size: .9rem;
+    }
+    .error { background: rgba(220, 76, 76, .14); color: var(--pico-color); border-left: 3px solid #dc4c4c; }
+    .ok    { background: rgba(46, 160, 87, .14); color: var(--pico-color); border-left: 3px solid #2ea057; }
+    .hint  { color: var(--pico-muted-color); font-size: .85rem; }
+    .hint + .hint, label + .hint { margin-left: .4rem; }
+
+    /* ---- forms ---- */
+    fieldset {
+      margin: 1.25rem 0;
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: var(--pico-border-radius);
+      background: var(--pico-card-sectioning-background-color);
+    }
+    fieldset > legend {
+      font-weight: 700;
+      padding: 0 .4rem;
+      text-transform: uppercase;
+      font-size: .8rem;
+      letter-spacing: .04em;
+      color: var(--pico-muted-color);
+    }
+    fieldset > legend + .hint { margin-top: -.25rem; }
+    form label > input[type="checkbox"] { margin-right: .4rem; }
+    label.check-inline {
+      display: flex;
+      align-items: center;
+      gap: .45rem;
+      margin: .85rem 0;
+    }
+    label.check-inline > input { margin: 0; }
+    details > summary { cursor: pointer; }
+    details > pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--pico-code-background-color);
+      padding: .6rem .75rem;
+      border-radius: var(--pico-border-radius);
+      font-size: .82rem;
+    }
   </style>
 </head>
 <body>
-  <nav>
-    <a href="/">任务</a>
-    <a href="/feeds">源</a>
-    <a href="/runs">历史</a>
-    <a href="/settings">设置</a>
-  </nav>
-  <main>
+  {% set _p = request.url.path if request else '' %}
+  <header class="app-header">
+    <div class="container">
+      <span class="brand">push2xteink</span>
+      <nav>
+        <a href="/"{% if _p == '/' or _p.startswith('/tasks') %} class="active" aria-current="page"{% endif %}>任务</a>
+        <a href="/feeds"{% if _p.startswith('/feeds') %} class="active" aria-current="page"{% endif %}>源</a>
+        <a href="/runs"{% if _p.startswith('/runs') %} class="active" aria-current="page"{% endif %}>历史</a>
+        <a href="/settings"{% if _p.startswith('/settings') %} class="active" aria-current="page"{% endif %}>设置</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container">
     {% block content %}{% endblock %}
   </main>
 </body>
