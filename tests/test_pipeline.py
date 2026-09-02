@@ -158,6 +158,45 @@ def test_gather_first_run_lookback_wired_into_select_new_articles(pipeline_confi
     s.close()
 
 
+def test_gather_max_items_caps_newest_across_feeds(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    task = pipeline_config.tasks[0].model_copy(update={"max_items": 3})  # feeds a, b
+
+    def fake_fetch(feed, **kw):
+        return FeedResult(articles=[
+            _art(feed.id, f"{feed.id}-old").model_copy(
+                update={"published_at": NOW - timedelta(hours=30)}),
+            _art(feed.id, f"{feed.id}-new").model_copy(
+                update={"published_at": NOW - timedelta(hours=1)}),
+        ])
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", fake_fetch)
+
+    kept, guids = _pipe(pipeline_config, s)._gather(task, now=NOW, warnings=[])
+    assert len(kept) == 3
+    # the two newest (a-new, b-new) plus one older; the oldest is dropped
+    assert {"a-new", "b-new"}.issubset({a.guid for a in kept})
+    assert sum(len(v) for v in guids.values()) == 3
+    s.close()
+
+
+def test_gather_max_age_hours_wired_into_select(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    task = pipeline_config.tasks[1].model_copy(  # "plain", feeds=["a"]
+        update={"max_age_hours": 24, "first_run_lookback_hours": 720}
+    )
+
+    def fake_fetch(feed, **kw):
+        return FeedResult(articles=[
+            _art(feed.id, "recent").model_copy(update={"published_at": NOW - timedelta(hours=5)}),
+            _art(feed.id, "stale").model_copy(update={"published_at": NOW - timedelta(hours=50)}),
+        ])
+    monkeypatch.setattr("push2xteink.pipeline.fetch_feed", fake_fetch)
+
+    kept, _ = _pipe(pipeline_config, s)._gather(task, now=NOW, warnings=[])
+    assert [a.guid for a in kept] == ["recent"]
+    s.close()
+
+
 # --- Task 3: _prepare ------------------------------------------------------
 
 

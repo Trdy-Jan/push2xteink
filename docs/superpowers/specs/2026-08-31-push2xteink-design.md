@@ -119,7 +119,15 @@ tasks:
     format: epub                     # epub | txt；默认 epub
     enabled: true
     first_run_lookback_hours: 48     # 仅任务从未成功执行过时生效
+    max_age_hours: 48                # 可选；每次执行都只保留 published_at 在此窗口内的文章（无日期的保留）
+    max_items: 3                     # 可选；过滤后按发布时间取最新 N 篇（跨该任务所有源合计）
 ```
+
+`max_age_hours` / `max_items` 用于 backlog 很长的源（如每日汇总类 RSS）：不设则不限制，
+行为同旧版。`max_age_hours` 是每次执行都生效的时间过滤（不同于只在首次生效的
+`first_run_lookback_hours`）；`max_items` 是过滤之后的硬上限。被 `max_items` 截掉的文章
+已记入 `seen_items` 但未推送，仍可在 `first_run_lookback_hours` 窗口内于后续执行补推
+（与上传失败的重试路径一致），超期则放弃。
 
 校验规则：
 
@@ -128,6 +136,7 @@ tasks:
 - `schedule` 必须是合法 cron
 - `summarize: true` 时 `ai.primary` 必须完整
 - `format` ∈ {epub, txt}
+- `max_age_hours` / `max_items` 若设置必须 > 0
 
 ## 5. 状态存储（state.db，SQLite）
 
@@ -179,8 +188,12 @@ token 缓存放 `kv` 表（`xteink_access_token` + `xteink_token_obtained_at`）
    新 entry：
      若该 task 在 runs 中没有任何 status=success 记录（首次）→
        仅保留发布时间在 now - first_run_lookback_hours 之内的
+     若设了 task.max_age_hours → 丢弃 published_at 早于 now - max_age_hours 的
+       （无 published_at 的保留）
      写入 seen_items（pushed_at = NULL）
-   汇总本次待推送条目列表 items；为空 → 跳到步骤 7，status=skipped
+   跨该任务所有源汇总后，若设了 task.max_items 且条数超过它 →
+     按 published_at 降序（无日期排最后）只保留最新的 max_items 条
+   得到本次待推送条目列表 items；为空 → 跳到步骤 7，status=skipped
 
 3. 取正文
    对每个 item：

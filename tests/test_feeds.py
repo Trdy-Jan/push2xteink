@@ -133,3 +133,34 @@ def test_naive_now_is_accepted(tmp_path):
                                now=datetime(2026, 8, 31, 12, 0))
     assert [a.guid for a in kept] == ["g1"]
     s.close()
+
+
+def test_max_age_hours_drops_old_every_run(tmp_path):
+    s = State(tmp_path / "s.db")
+    arts = [
+        _art("recent", NOW - timedelta(hours=10)),
+        _art("stale", NOW - timedelta(hours=50)),
+        _art("undated", None),
+    ]
+    kept = select_new_articles(
+        s, "f", arts, first_run=False, lookback_hours=720, max_age_hours=24, now=NOW
+    )
+    # undated passes (can't prove it's stale); "stale" is dropped
+    assert [a.guid for a in kept] == ["recent", "undated"]
+    # dropped item was not recorded as seen
+    assert s.is_item_pushable("f", "stale", 720, now=NOW) is True
+    row = s._conn.execute(
+        "SELECT COUNT(*) c FROM seen_items WHERE item_guid = 'stale'"
+    ).fetchone()
+    assert row["c"] == 0
+    s.close()
+
+
+def test_max_age_hours_none_is_no_limit(tmp_path):
+    s = State(tmp_path / "s.db")
+    arts = [_art("old", NOW - timedelta(hours=1000))]
+    kept = select_new_articles(
+        s, "f", arts, first_run=False, lookback_hours=2000, max_age_hours=None, now=NOW
+    )
+    assert [a.guid for a in kept] == ["old"]
+    s.close()
