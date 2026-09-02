@@ -1,6 +1,11 @@
 services:
   push2xteink:
-    build: .
+    build:
+      context: .
+      args:
+        # 国内构建加速；海外/CI 在 .env 里设为空 / 官方源即可
+        APT_MIRROR: "${APT_MIRROR-mirrors.tuna.tsinghua.edu.cn}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL-https://pypi.tuna.tsinghua.edu.cn/simple}"
     image: push2xteink:local
     restart: unless-stopped
     init: true                       # tini: reap zombies + forward SIGTERM
