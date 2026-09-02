@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from push2xteink.builders.common import (
-    chapter_body_html, format_published, html_to_text, safe_filename, safe_segment,
+    format_published, html_to_text, safe_filename, safe_segment, summary_paragraphs,
 )
 from push2xteink.models import Article
 
@@ -45,25 +45,18 @@ def test_format_published():
     assert format_published(datetime(2026, 8, 31, 15, 5, tzinfo=tz)) == "2026-08-31 07:05"
 
 
-def test_chapter_body_without_summary_is_content_only():
-    a = Article(feed_id="f", guid="g", title="t", link="l", content_html="<p>body</p>")
-    assert chapter_body_html(a) == "<p>body</p>"
+def test_summary_paragraphs_one_p_per_line():
+    assert summary_paragraphs("line one\nline two") == "<p>line one</p><p>line two</p>"
 
 
-def test_chapter_body_with_summary_prepends_and_separates():
-    a = Article(feed_id="f", guid="g", title="t", link="l",
-                content_html="<p>body</p>", summary="line one\nline two")
-    out = chapter_body_html(a)
-    assert out.index("line one") < out.index("<hr")
-    assert out.index("<hr") < out.index("<p>body</p>")
-    assert "<p>line one</p>" in out and "<p>line two</p>" in out
+def test_summary_paragraphs_skips_blank_lines():
+    assert summary_paragraphs("a\n\n  \nb") == "<p>a</p><p>b</p>"
 
 
-def test_chapter_body_escapes_summary():
-    a = Article(feed_id="f", guid="g", title="t", link="l",
-                content_html="<p>b</p>", summary="a < b & c")
-    out = chapter_body_html(a)
-    assert "a &lt; b &amp; c" in out
+def test_summary_paragraphs_escapes_and_has_no_div():
+    out = summary_paragraphs("a < b & c")
+    assert out == "<p>a &lt; b &amp; c</p>"
+    assert "<div" not in out
 
 
 def test_html_to_text_unclosed_p_tags_split_lines():
