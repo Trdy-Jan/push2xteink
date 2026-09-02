@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .builders import BuildError, build_epub, build_txt, html_to_text
+from .builders import BuildError, build_epub, build_txt, html_to_text, safe_segment
 from .extract import apply_full_text
 from .feeds import fetch_feed, select_new_articles
 from .models import Article, Config, Feed, Task
@@ -241,7 +241,10 @@ class Pipeline:
             articles = self._prepare(task, articles, warnings=warnings)
             path = self._build(task, articles, now=now, out_dir=work_dir)
             built_name = path.name
-            record_id = self._xteink.push_file(path, path.name)
+            # 设备上按 /RSS/{任务名}/{日期}/ 分目录，避免全部平铺在一个文件夹里。
+            # "RSS" 段暂为常量，日后其他来源可换成自己的前缀。
+            save_path = f"/RSS/{safe_segment(task.name)}/{now:%Y-%m-%d}/{path.name}"
+            record_id = self._xteink.push_file(path, path.name, save_path=save_path)
 
             # A post-upload DB failure below leaves guids un-marked, so the same
             # items re-push next run -- the safe direction (dup on reader, no loss).

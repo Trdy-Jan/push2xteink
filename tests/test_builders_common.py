@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from push2xteink.builders.common import (
-    chapter_body_html, format_published, html_to_text, safe_filename,
+    chapter_body_html, format_published, html_to_text, safe_filename, safe_segment,
 )
 from push2xteink.models import Article
 
@@ -23,6 +23,17 @@ def test_safe_filename_empty_becomes_untitled():
 def test_safe_filename_truncates_long():
     name = safe_filename("x" * 300, "epub")
     assert name == "x" * 120 + ".epub"
+
+
+def test_safe_segment_strips_path_separators_and_illegal_chars():
+    assert safe_segment("科技/ 新闻: A*B?") == "科技_ 新闻_ A_B_"
+    assert safe_segment("  早报  ") == "早报"
+
+
+def test_safe_segment_empty_or_all_illegal_becomes_untitled():
+    assert safe_segment("   ") == "untitled"
+    assert safe_segment("///") == "untitled"
+    assert safe_segment("") == "untitled"
 
 
 def test_format_published():

@@ -29,6 +29,16 @@ def safe_filename(title: str, ext: str) -> str:
     return f"{stem}.{ext}"
 
 
+def safe_segment(name: str) -> str:
+    """把任意字符串清成一个可用作设备路径分段的名字（不含扩展名）。"""
+    seg = _ILLEGAL.sub("_", name or "")
+    seg = _WS.sub(" ", seg).strip().strip(".").strip()
+    seg = seg[:_MAX_STEM].strip()
+    if not seg.strip("_"):
+        return "untitled"
+    return seg
+
+
 def format_published(dt: datetime | None) -> str:
     if dt is None:
         return ""

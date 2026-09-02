@@ -13,7 +13,8 @@ class FakeSummarizer:
 
 class FakeXteink:
     def __init__(self): self.closed = False; self.pushed = []
-    def push_file(self, path, filename): self.pushed.append((Path(path).name, filename)); return "rec-1"
+    def push_file(self, path, filename, *, save_path=None):
+        self.pushed.append((Path(path).name, filename, save_path)); return "rec-1"
     def close(self): self.closed = True
 
 
@@ -332,11 +333,29 @@ def test_run_task_success_marks_pushed_and_writes_run(pipeline_config, tmp_path,
     out = p.run_task("brief", now=NOW)
     assert out.status == "success" and out.item_count == 2 and out.record_id == "rec-1"
     assert out.file_name == "早报_20260831.epub"
-    assert fx.pushed == [("早报_20260831.epub", "早报_20260831.epub")]
+    assert fx.pushed == [(
+        "早报_20260831.epub", "早报_20260831.epub",
+        "/RSS/早报/2026-08-31/早报_20260831.epub",
+    )]
     assert s.is_item_pushable("a", "a1", 48, now=NOW) is False  # marked pushed
     assert s.task_has_successful_run("brief") is True
     row = s.recent_runs(1)[0]
     assert row["status"] == "success" and row["item_count"] == 2
+    s.close()
+
+
+def test_run_task_sanitizes_task_name_in_save_path(pipeline_config, tmp_path, monkeypatch):
+    s = State(tmp_path / "s.db")
+    fx = FakeXteink()
+    cfg = pipeline_config.model_copy(update={
+        "tasks": [
+            t.model_copy(update={"name": "科技/新闻"}) if t.id == "brief" else t
+            for t in pipeline_config.tasks
+        ]
+    })
+    p = _full_pipe(cfg, s, monkeypatch, xteink=fx)
+    p.run_task("brief", now=NOW)
+    assert fx.pushed[0][2] == "/RSS/科技_新闻/2026-08-31/科技_新闻_20260831.epub"
     s.close()
 
 
@@ -353,7 +372,7 @@ def test_run_task_no_new_items_is_skipped(pipeline_config, tmp_path, monkeypatch
 def test_run_task_upload_failure_does_not_mark_pushed(pipeline_config, tmp_path, monkeypatch):
     s = State(tmp_path / "s.db")
     class FailXteink:
-        def push_file(self, p, f): raise XteinkUploadError("500")
+        def push_file(self, p, f, *, save_path=None): raise XteinkUploadError("500")
         def close(self): pass
     p = _full_pipe(pipeline_config, s, monkeypatch, xteink=FailXteink())
     out = p.run_task("brief", now=NOW)
@@ -455,7 +474,7 @@ def test_run_task_normalizes_tzaware_non_utc_now(pipeline_config, tmp_path, monk
 def test_run_task_failed_run_records_item_count_and_file_name(pipeline_config, tmp_path, monkeypatch):
     s = State(tmp_path / "s.db")
     class FailXteink:
-        def push_file(self, p, f): raise XteinkUploadError("500")
+        def push_file(self, p, f, *, save_path=None): raise XteinkUploadError("500")
         def close(self): pass
     p = _full_pipe(pipeline_config, s, monkeypatch, xteink=FailXteink())
     out = p.run_task("brief", now=NOW)
@@ -484,7 +503,7 @@ def test_run_task_partial_gather_failure_leaves_earlier_feed_retryable(pipeline_
 def test_run_task_finish_run_failure_on_failure_path_does_not_propagate(pipeline_config, tmp_path, monkeypatch):
     s = State(tmp_path / "s.db")
     class FailXteink:
-        def push_file(self, p, f): raise XteinkUploadError("500")
+        def push_file(self, p, f, *, save_path=None): raise XteinkUploadError("500")
         def close(self): pass
     p = _full_pipe(pipeline_config, s, monkeypatch, xteink=FailXteink())
     monkeypatch.setattr(s, "finish_run",
