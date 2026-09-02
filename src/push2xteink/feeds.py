@@ -81,18 +81,29 @@ def select_new_articles(
     *,
     first_run: bool,
     lookback_hours: int,
+    max_age_hours: int | None = None,
     now: datetime | None = None,
 ) -> list[Article]:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     cutoff = now - timedelta(hours=lookback_hours)
+    age_cutoff = (
+        now - timedelta(hours=max_age_hours) if max_age_hours is not None else None
+    )
 
     kept: list[Article] = []
     for art in articles:
         if not state.is_item_pushable(feed_id, art.guid, lookback_hours, now=now):
             continue
         if first_run and (art.published_at is None or art.published_at < cutoff):
+            continue
+        # Undated articles pass the age filter -- we can't prove they're stale.
+        if (
+            age_cutoff is not None
+            and art.published_at is not None
+            and art.published_at < age_cutoff
+        ):
             continue
         state.record_seen(feed_id, art.guid, now=now)
         kept.append(art)

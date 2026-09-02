@@ -56,6 +56,16 @@
       value="{{ task.first_run_lookback_hours if task else 48 }}">
   </label>
 
+  <label>只推送最近 N 小时内发布的（留空 = 不限）
+    <input type="number" name="max_age_hours" min="1"
+      value="{{ task.max_age_hours if task and task.max_age_hours is not none else '' }}">
+  </label>
+
+  <label>每次最多推送几篇（留空 = 不限）
+    <input type="number" name="max_items" min="1"
+      value="{{ task.max_items if task and task.max_items is not none else '' }}">
+  </label>
+
   <div class="toolbar">
     <button type="submit">保存</button>
     <button type="button" onclick="document.getElementById('task-form').innerHTML=''">取消</button>

@@ -93,6 +93,9 @@ class Task(BaseModel):
     format: Literal["epub", "txt"] = "epub"
     enabled: bool = True
     first_run_lookback_hours: int = Field(48, gt=0)
+    # Optional per-run caps for feeds with a long backlog. None = no limit.
+    max_age_hours: int | None = Field(default=None, gt=0)
+    max_items: int | None = Field(default=None, gt=0)
 
 
 class Config(BaseModel):

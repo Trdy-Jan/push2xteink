@@ -156,7 +156,18 @@ def _save_task(
     summarize: bool,
     fmt: str,
     lookback: int,
+    max_age_hours: str,
+    max_items: str,
 ) -> HTMLResponse:
+    # Optional caps: blank field -> not set. Non-numeric text can't come from
+    # the <input type="number"> widget, so treat it as "not set" too.
+    def _opt_int(raw: str) -> int | None:
+        raw = (raw or "").strip()
+        try:
+            return int(raw) if raw else None
+        except ValueError:
+            return None
+
     payload = {
         "name": name,
         "feeds": feeds,
@@ -164,16 +175,25 @@ def _save_task(
         "summarize": summarize,
         "format": fmt,
         "first_run_lookback_hours": lookback,
+        "max_age_hours": _opt_int(max_age_hours),
+        "max_items": _opt_int(max_items),
     }
+    # Keep config.yaml tidy: only write the optional caps when they're set,
+    # and drop them again when the user clears the field.
+    optional = {"max_age_hours", "max_items"}
+    stored = {k: v for k, v in payload.items() if k not in optional or v is not None}
 
     def mutate(raw: dict) -> None:
         if task_id is not None:
             for t in raw["tasks"]:
                 if t["id"] == task_id:
-                    t.update(payload)
+                    t.update(stored)
+                    for k in optional:
+                        if payload[k] is None:
+                            t.pop(k, None)
                     return
             raise HTTPException(status_code=404, detail=f"task {task_id!r} not found")
-        raw["tasks"].append({"id": _gen_id("t"), "enabled": True, **payload})
+        raw["tasks"].append({"id": _gen_id("t"), "enabled": True, **stored})
 
     try:
         apply_config_change(request, mutate)
@@ -197,6 +217,8 @@ def task_create(
     summarize: bool = Form(False),
     format: str = Form("epub"),
     first_run_lookback_hours: int = Form(48),
+    max_age_hours: str = Form(""),
+    max_items: str = Form(""),
 ) -> HTMLResponse:
     return _save_task(
         request,
@@ -207,6 +229,8 @@ def task_create(
         summarize=summarize,
         fmt=format,
         lookback=first_run_lookback_hours,
+        max_age_hours=max_age_hours,
+        max_items=max_items,
     )
 
 
@@ -220,6 +244,8 @@ def task_update(
     summarize: bool = Form(False),
     format: str = Form("epub"),
     first_run_lookback_hours: int = Form(48),
+    max_age_hours: str = Form(""),
+    max_items: str = Form(""),
 ) -> HTMLResponse:
     return _save_task(
         request,
@@ -230,6 +256,8 @@ def task_update(
         summarize=summarize,
         fmt=format,
         lookback=first_run_lookback_hours,
+        max_age_hours=max_age_hours,
+        max_items=max_items,
     )
 
 

@@ -118,6 +118,50 @@ def test_post_task_update_persists(web_client, web_env):
     assert load_config(cfg_path).tasks[0].name == "晚报"
 
 
+def test_task_form_has_item_limit_fields(web_client):
+    r = web_client.get("/tasks/new")
+    assert 'name="max_age_hours"' in r.text
+    assert 'name="max_items"' in r.text
+
+
+def test_post_task_create_with_max_items(web_client, web_env):
+    r = web_client.post(
+        "/tasks",
+        data={
+            "name": "trending",
+            "feeds": ["hn"],
+            "schedule": "0 12 * * *",
+            "first_run_lookback_hours": "48",
+            "max_items": "3",
+            "max_age_hours": "",
+        },
+    )
+    assert r.status_code == 200
+    cfg_path, _ = web_env
+    t = load_config(cfg_path).tasks[-1]
+    assert t.name == "trending"
+    assert t.max_items == 3
+    assert t.max_age_hours is None
+
+
+def test_post_task_update_clears_max_items(web_client, web_env):
+    cfg_path, _ = web_env
+    web_client.post(
+        "/tasks/brief",
+        data={"name": "早报", "feeds": ["hn"], "schedule": "0 7 * * *",
+              "first_run_lookback_hours": "48", "max_items": "5"},
+    )
+    assert load_config(cfg_path).tasks[0].max_items == 5
+    # blank field on a later save removes the cap
+    web_client.post(
+        "/tasks/brief",
+        data={"name": "早报", "feeds": ["hn"], "schedule": "0 7 * * *",
+              "first_run_lookback_hours": "48", "max_items": ""},
+    )
+    assert load_config(cfg_path).tasks[0].max_items is None
+    assert "max_items" not in cfg_path.read_text(encoding="utf-8")
+
+
 def test_post_task_bad_cron_returns_form_with_error(web_client, web_env):
     r = web_client.post(
         "/tasks/brief",

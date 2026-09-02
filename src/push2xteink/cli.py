@@ -65,6 +65,8 @@ tasks:
     format: epub                 # epub | txt
     enabled: true
     first_run_lookback_hours: 48 # 仅任务从未成功执行过时生效
+    # max_age_hours: 48          # 可选；每次只推 published_at 在此窗口内的文章
+    # max_items: 3               # 可选；过滤后按发布时间取最新 N 篇
 """
 
 

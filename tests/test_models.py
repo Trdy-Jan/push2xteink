@@ -141,6 +141,27 @@ def test_first_run_lookback_hours_zero_rejected(valid_config_dict):
         Config.model_validate(valid_config_dict)
 
 
+def test_task_item_limits_default_none(valid_config_dict):
+    cfg = Config.model_validate(valid_config_dict)
+    assert cfg.tasks[0].max_items is None
+    assert cfg.tasks[0].max_age_hours is None
+
+
+def test_task_item_limits_parse(valid_config_dict):
+    valid_config_dict["tasks"][0]["max_items"] = 3
+    valid_config_dict["tasks"][0]["max_age_hours"] = 48
+    cfg = Config.model_validate(valid_config_dict)
+    assert cfg.tasks[0].max_items == 3
+    assert cfg.tasks[0].max_age_hours == 48
+
+
+@pytest.mark.parametrize("field", ["max_items", "max_age_hours"])
+def test_task_item_limits_reject_non_positive(valid_config_dict, field):
+    valid_config_dict["tasks"][0][field] = 0
+    with pytest.raises(ValidationError):
+        Config.model_validate(valid_config_dict)
+
+
 def test_unknown_key_rejected(valid_config_dict):
     valid_config_dict["notes"] = "keep me"
     with pytest.raises(ValidationError):

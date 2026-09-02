@@ -96,7 +96,6 @@ class Pipeline:
     ) -> tuple[list[Article], dict[str, list[str]]]:
         first_run = not self._state.task_has_successful_run(task.id)
         kept: list[Article] = []
-        kept_guids: dict[str, list[str]] = {}
         for feed_id in task.feeds:
             feed = self._feed(feed_id)
             result = fetch_feed(
@@ -107,17 +106,30 @@ class Pipeline:
             if result.error:
                 warnings.append(f"feed {feed_id}: {result.error}")
                 continue
-            new = select_new_articles(
-                self._state,
-                feed_id,
-                result.articles,
-                first_run=first_run,
-                lookback_hours=task.first_run_lookback_hours,
-                now=now,
+            kept.extend(
+                select_new_articles(
+                    self._state,
+                    feed_id,
+                    result.articles,
+                    first_run=first_run,
+                    lookback_hours=task.first_run_lookback_hours,
+                    max_age_hours=task.max_age_hours,
+                    now=now,
+                )
             )
-            if new:
-                kept.extend(new)
-                kept_guids[feed_id] = [a.guid for a in new]
+
+        # task-wide cap: keep the newest N across all feeds. The dropped items
+        # were recorded as seen but not pushed, so they stay pushable and can
+        # come through on a later run (same as an upload failure) before they
+        # age out of the first_run_lookback_hours window.
+        if task.max_items is not None and len(kept) > task.max_items:
+            epoch = datetime.min.replace(tzinfo=timezone.utc)
+            kept.sort(key=lambda a: a.published_at or epoch, reverse=True)
+            kept = kept[: task.max_items]
+
+        kept_guids: dict[str, list[str]] = {}
+        for art in kept:
+            kept_guids.setdefault(art.feed_id, []).append(art.guid)
         return kept, kept_guids
 
     # --- step 3-4: full-text + summary ---
