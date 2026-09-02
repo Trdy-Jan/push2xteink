@@ -19,8 +19,8 @@
   state.db ◄──────► │  (SQLite: seen_items / runs)     │
                     └─────────────────────────────────┘
                              │
-                             ▼  三步上传
-                    api-prod.xteink.cn → 阿里云 OSS → callback
+                             ▼  四步上传
+                    签名 → 阿里云 OSS → callback → device/tasks
                              │
                              ▼
                     绑定的阅读器（阅星曈 X4）

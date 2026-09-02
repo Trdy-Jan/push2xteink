@@ -154,6 +154,54 @@ class XteinkClient:
                 f"OSS upload returned {resp.status_code}: {resp.text[:200]}"
             )
 
+    def _device_id(self, token: str) -> str:
+        try:
+            resp = self._api_client.get(
+                f"{self._api}/api/v1/device/binding",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except httpx.HTTPError as exc:
+            raise XteinkUploadError(f"device binding request failed: {exc}") from exc
+        self._check_status(resp, "device binding")
+        data = self._json_dict(resp, "device binding")
+        devices = data.get("data")
+        if not isinstance(devices, list) or not devices:
+            raise XteinkUploadError(f"no bound device: {data!r}")
+        chosen = next(
+            (d for d in devices if isinstance(d, dict) and d.get("selected")), None
+        )
+        if chosen is None and isinstance(devices[0], dict):
+            chosen = devices[0]
+        device_id = chosen.get("device_id") if isinstance(chosen, dict) else None
+        if not device_id:
+            raise XteinkUploadError(f"bound device has no device_id: {data!r}")
+        return device_id
+
+    def _create_device_task(
+        self, token: str, device_id: str, file_url: str, filename: str
+    ) -> str:
+        try:
+            resp = self._api_client.post(
+                f"{self._api}/api/v1/device/tasks",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "device_id": device_id,
+                    "file_url": file_url,
+                    "save_path": f"/Pushed Books/{filename}",
+                    "points_source": "playmethod",
+                    "func_code": "h5-file-upload",
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise XteinkUploadError(f"device task request failed: {exc}") from exc
+        self._check_status(resp, "device task")
+        data = self._json_dict(resp, "device task")
+        task = data.get("task")
+        task_id = task.get("task_id") if isinstance(task, dict) else None
+        if not task_id:
+            raise XteinkUploadError(f"device task response had no task_id: {data!r}")
+        return task_id
+
     def _callback(
         self, token: str, sig: dict, filename: str, file_md5: str,
         file_size: int, content_type: str,
@@ -198,6 +246,18 @@ class XteinkClient:
         )
         if not sig.get("instant_upload"):
             self._upload_to_oss(sig, content_type, data)
-        return self._auth_retry(
+        record_id = self._auth_retry(
             lambda tok: self._callback(tok, sig, filename, file_md5, file_size, content_type)
         )
+
+        # Steps A-C only stage the file in OSS. Without this the file never
+        # reaches the account or the bound reader -- the upload/callback protocol
+        # captured in the spec was missing this final "push to device" call.
+        file_url = sig.get("download_url") or (
+            f"{sig['host'].rstrip('/')}/{sig['key'].lstrip('/')}"
+        )
+        device_id = self._auth_retry(self._device_id)
+        self._auth_retry(
+            lambda tok: self._create_device_task(tok, device_id, file_url, filename)
+        )
+        return record_id
