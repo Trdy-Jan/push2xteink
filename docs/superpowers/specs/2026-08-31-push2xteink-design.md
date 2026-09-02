@@ -246,7 +246,9 @@ token 缓存放 `kv` 表（`xteink_access_token` + `xteink_token_obtained_at`）
 
 ## 7. xteink 上传器（xteink.py）
 
-对外接口：`XteinkClient.push_file(path: Path, filename: str) -> str`（返回 record_id）。
+对外接口：`XteinkClient.push_file(path: Path, filename: str, *, save_path: str | None = None) -> str`
+（返回 record_id）。`save_path` 省略时回退到历史行为 `/Pushed Books/<filename>`；pipeline 传入
+`/RSS/<任务名>/<YYYY-MM-DD>/<filename>` 以在设备上分目录。
 
 已通过抓包确认的协议（base = `https://api-prod.xteink.cn`）：
 
@@ -318,7 +320,7 @@ POST /api/v1/device/tasks
 body(JSON): {
   "device_id": <上面的 device_id>,
   "file_url": <signature 的 download_url，或 {host}/{key} 拼接>,
-  "save_path": "/Pushed Books/<filename>",
+  "save_path": "/RSS/<任务名>/<YYYY-MM-DD>/<filename>",  // 设备上按来源/任务/日期分目录；"RSS" 段暂为常量
   "points_source": "playmethod",
   "func_code": "h5-file-upload"
 }

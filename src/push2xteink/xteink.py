@@ -178,7 +178,7 @@ class XteinkClient:
         return device_id
 
     def _create_device_task(
-        self, token: str, device_id: str, file_url: str, filename: str
+        self, token: str, device_id: str, file_url: str, save_path: str
     ) -> str:
         try:
             resp = self._api_client.post(
@@ -187,7 +187,7 @@ class XteinkClient:
                 json={
                     "device_id": device_id,
                     "file_url": file_url,
-                    "save_path": f"/Pushed Books/{filename}",
+                    "save_path": save_path,
                     "points_source": "playmethod",
                     "func_code": "h5-file-upload",
                 },
@@ -228,7 +228,9 @@ class XteinkClient:
         return record_id
 
     # --- orchestration ---
-    def push_file(self, path: Path, filename: str) -> str:
+    def push_file(
+        self, path: Path, filename: str, *, save_path: str | None = None
+    ) -> str:
         ext = path.suffix.lower()
         content_type = _CONTENT_TYPES.get(ext)
         if content_type is None:
@@ -256,8 +258,10 @@ class XteinkClient:
         file_url = sig.get("download_url") or (
             f"{sig['host'].rstrip('/')}/{sig['key'].lstrip('/')}"
         )
+        if save_path is None:
+            save_path = f"/Pushed Books/{filename}"
         device_id = self._auth_retry(self._device_id)
         self._auth_retry(
-            lambda tok: self._create_device_task(tok, device_id, file_url, filename)
+            lambda tok: self._create_device_task(tok, device_id, file_url, save_path)
         )
         return record_id

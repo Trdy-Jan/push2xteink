@@ -383,7 +383,8 @@ def test_create_device_task_sends_expected_body(tmp_path):
         return_value=httpx.Response(201, json=TASK_RESP)
     )
     tid = _client(tmp_path)._create_device_task(
-        "tok", "DEV-9", "https://cdn.example.com/x.epub", "早报_20260901.epub"
+        "tok", "DEV-9", "https://cdn.example.com/x.epub",
+        "/RSS/早报/2026-09-01/早报_20260901.epub",
     )
     assert tid == "task-1"
     req = route.calls.last.request
@@ -391,7 +392,7 @@ def test_create_device_task_sends_expected_body(tmp_path):
     assert json.loads(req.content) == {
         "device_id": "DEV-9",
         "file_url": "https://cdn.example.com/x.epub",
-        "save_path": "/Pushed Books/早报_20260901.epub",
+        "save_path": "/RSS/早报/2026-09-01/早报_20260901.epub",
         "points_source": "playmethod",
         "func_code": "h5-file-upload",
     }
@@ -431,6 +432,26 @@ def test_push_file_prefers_signature_download_url(tmp_path):
     _client(tmp_path).push_file(f, "a.txt")
     body = json.loads(task_route.calls.last.request.content)
     assert body["file_url"] == "https://cdn.example.com/served/x.epub"
+
+
+@respx.mock
+def test_push_file_forwards_explicit_save_path(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"data")
+    respx.post(f"{API}/auth/login").mock(return_value=httpx.Response(200, json={"access_token": "t"}))
+    respx.post(f"{API}/api/v1/upload/signature").mock(
+        return_value=httpx.Response(200, json=SIG_RESP)
+    )
+    respx.post("https://oss.example.com").mock(return_value=httpx.Response(204))
+    respx.post(f"{API}/api/v1/upload/callback").mock(
+        return_value=httpx.Response(200, json={"record_id": "r"})
+    )
+    _, task_route = _mock_device_push()
+    _client(tmp_path).push_file(
+        f, "a.txt", save_path="/RSS/早报/2026-09-01/a.txt"
+    )
+    body = json.loads(task_route.calls.last.request.content)
+    assert body["save_path"] == "/RSS/早报/2026-09-01/a.txt"
 
 
 @respx.mock
