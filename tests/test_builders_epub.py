@@ -6,7 +6,9 @@ from ebooklib import epub
 
 from push2xteink.builders.epub import build_epub
 from push2xteink.builders.common import BuildError
-from push2xteink.models import Article
+from push2xteink.models import Article, EmbeddedImage
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
 
 
 def _articles(n=2):
@@ -79,6 +81,62 @@ def test_build_epub_creates_missing_out_dir(tmp_path):
     nested = tmp_path / "a" / "b"
     path = build_epub("t", _articles(1), out_dir=nested)
     assert path.exists() and path.parent == nested
+
+
+def _zip_text(path, suffix):
+    import zipfile
+
+    with zipfile.ZipFile(path) as z:
+        name = next(n for n in z.namelist() if n.endswith(suffix))
+        return z.read(name).decode("utf-8")
+
+
+def test_build_epub_includes_and_links_stylesheet(tmp_path):
+    path = build_epub("t", _articles(1), out_dir=tmp_path)
+    css = _zip_text(path, "style/main.css")
+    assert "line-height" in css and "img {" in css
+    chapter = _zip_text(path, "ch000.xhtml")
+    assert '<link href="style/main.css" rel="stylesheet" type="text/css"/>' in chapter
+
+
+def test_build_epub_embeds_article_images(tmp_path):
+    art = Article(
+        feed_id="f", guid="g0", title="带图", link="https://x/0",
+        content_html='<p>正文</p><img src="img/pic.png" alt="p"/>',
+        images=[EmbeddedImage(filename="img/pic.png", media_type="image/png", data=PNG)],
+    )
+    path = build_epub("t", [art], out_dir=tmp_path)
+    book = epub.read_epub(str(path))
+    imgs = [i for i in book.get_items() if i.file_name == "img/pic.png"]
+    assert len(imgs) == 1
+    assert imgs[0].get_content() == PNG
+    chapter = next(
+        i for i in book.get_items()
+        if isinstance(i, epub.EpubHtml) and i.file_name.startswith("ch")
+    ).get_content().decode("utf-8")
+    assert 'src="img/pic.png"' in chapter
+
+
+def test_build_epub_dedupes_image_shared_by_two_articles(tmp_path):
+    img = EmbeddedImage(filename="img/pic.png", media_type="image/png", data=PNG)
+    arts = [
+        Article(feed_id="f", guid=f"g{i}", title=f"a{i}", link=f"https://x/{i}",
+                content_html='<img src="img/pic.png"/>', images=[img])
+        for i in range(2)
+    ]
+    path = build_epub("t", arts, out_dir=tmp_path)
+    book = epub.read_epub(str(path))
+    assert len([i for i in book.get_items() if i.file_name == "img/pic.png"]) == 1
+
+
+def test_build_epub_chapter_body_is_well_formed_xml(tmp_path):
+    from xml.etree import ElementTree
+
+    path = build_epub("t", _articles(2), out_dir=tmp_path)
+    book = epub.read_epub(str(path))
+    for doc in book.get_items():
+        if isinstance(doc, epub.EpubHtml) and doc.file_name.startswith("ch"):
+            ElementTree.fromstring(doc.get_content())  # raises on malformed XML
 
 
 def test_build_epub_overwrites_existing(tmp_path):

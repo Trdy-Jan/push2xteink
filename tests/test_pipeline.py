@@ -217,6 +217,63 @@ def test_prepare_applies_full_text_concurrently_preserving_order(pipeline_config
     s.close()
 
 
+def test_prepare_downloads_and_embeds_images(pipeline_config, tmp_path, monkeypatch):
+    import httpx
+    import respx
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
+    with respx.mock:
+        respx.get("https://img.example/p.png").mock(
+            return_value=httpx.Response(200, content=png, headers={"content-type": "image/png"})
+        )
+        monkeypatch.setattr(
+            "push2xteink.pipeline.apply_full_text",
+            lambda a, **kw: a.model_copy(
+                update={"content_html": '<p>body</p><img src="https://img.example/p.png"/>'}
+            ),
+        )
+        s = State(tmp_path / "s.db")
+        out = _pipe(pipeline_config, s)._prepare(
+            pipeline_config.tasks[0], [_art("a", "a1")], warnings=[]  # tasks[0] = epub
+        )
+        art = out[0]
+        assert len(art.images) == 1 and art.images[0].data == png
+        assert art.images[0].filename in art.content_html
+        assert "https://img.example/p.png" not in art.content_html
+        s.close()
+
+
+def test_prepare_skips_image_download_for_txt_task(pipeline_config, tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "push2xteink.pipeline.download_images",
+        lambda *a, **kw: called.append(1) or ([], {}),
+    )
+    monkeypatch.setattr(
+        "push2xteink.pipeline.apply_full_text",
+        lambda a, **kw: a.model_copy(
+            update={"content_html": '<p>x</p><img src="https://img.example/p.png"/>'}
+        ),
+    )
+    s = State(tmp_path / "s.db")
+    out = _pipe(pipeline_config, s)._prepare(
+        pipeline_config.tasks[1], [_art("a", "a1")], warnings=[]  # tasks[1] = txt
+    )
+    assert called == [] and out[0].images == []
+    assert "<img" not in out[0].content_html
+    s.close()
+
+
+def test_prepare_normalizes_dirty_content_html(pipeline_config, tmp_path, monkeypatch):
+    monkeypatch.setattr("push2xteink.pipeline.apply_full_text", lambda a, **kw: a)
+    dirty = _art("a", "a1")
+    dirty.content_html = '<div><script>x</script><p style="color:red">hi</p></div>'
+    s = State(tmp_path / "s.db")
+    out = _pipe(pipeline_config, s)._prepare(pipeline_config.tasks[1], [dirty], warnings=[])
+    assert out[0].content_html == "<p>hi</p>"
+    s.close()
+
+
 def test_prepare_summarizes_when_task_wants_it(pipeline_config, tmp_path, monkeypatch):
     s = State(tmp_path / "s.db")
     monkeypatch.setattr("push2xteink.pipeline.apply_full_text", lambda a, **kw: a)

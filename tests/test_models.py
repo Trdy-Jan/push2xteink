@@ -3,7 +3,24 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from push2xteink.models import Article, Config, DEFAULT_PROMPT, Feed, ProxyConfig
+from push2xteink.models import (
+    Article,
+    Config,
+    DEFAULT_PROMPT,
+    EmbeddedImage,
+    Feed,
+    ProxyConfig,
+)
+
+
+def test_article_images_default_empty():
+    art = Article(feed_id="f", guid="g", title="t", link="")
+    assert art.images == []
+
+
+def test_embedded_image_holds_bytes():
+    img = EmbeddedImage(filename="img/abc.jpg", media_type="image/jpeg", data=b"\xff\xd8")
+    assert img.data == b"\xff\xd8" and img.filename == "img/abc.jpg"
 
 
 @pytest.mark.parametrize("url", ["http://127.0.0.1:7890", "socks5://h:1", "https://p:8080", None])
