@@ -77,6 +77,9 @@ bind mount。快速开始里的 `printf 'APP_UID=%s\nAPP_GID=%s\n' "$(id -u)" "$
 | `APP_UID` / `APP_GID` | `10001` | 容器进程的 uid/gid（`user:` 传入）。设成 `id -u` / `id -g` 让 `./data` 保持宿主可编辑。 |
 | `CONFIG_PATH` | `/data/config.yaml` | 配置文件路径（compose 已固定为卷内路径，一般不用改）。 |
 | `DB_PATH` | `/data/state.db` | SQLite 路径（同上）。 |
+| `APT_MIRROR` / `PIP_INDEX_URL` | 清华源 | **仅构建时**用的国内镜像源（`docker compose build`）。海外/CI 设 `APT_MIRROR=` 空、`PIP_INDEX_URL=https://pypi.org/simple`。 |
+
+> 拉基础镜像 `python:3.12-slim` 本身走 Docker Hub，慢的话在 `/etc/docker/daemon.json` 配 `registry-mirrors`（daemon 级，Dockerfile 管不了）。
 
 ## 配置文件
 
