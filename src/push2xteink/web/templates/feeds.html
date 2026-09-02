@@ -1,11 +1,14 @@
 {% extends "base.html" %}
 {% block title %}源 - push2xteink{% endblock %}
 {% block content %}
-<h1>RSS 源</h1>
+<div class="page-head">
+  <h1>RSS 源</h1>
+  <p class="subtitle">管理订阅地址。任务会从这里选择要抓取的源；「全文提取」会打开原文链接抓正文，「走代理」用设置里的代理访问。</p>
+</div>
 
 <form class="toolbar" hx-post="/feeds" hx-target="#feed-table" hx-swap="outerHTML"
       hx-on::after-request="if(event.detail.successful) this.reset()">
-  <input name="url" placeholder="RSS URL" required>
+  <input name="url" type="url" placeholder="RSS / Atom 地址，如 https://example.com/feed.xml" required>
   <label class="check-inline">
     <input type="hidden" name="full_text" value="false">
     <input type="checkbox" name="full_text" value="true" checked> 全文提取

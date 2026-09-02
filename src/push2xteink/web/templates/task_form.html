@@ -1,73 +1,87 @@
 <form id="task-editor" hx-post="{{ action }}"
       hx-target="#task-form" hx-swap="innerHTML">
-  {% if error %}<p class="error">保存失败：{{ error }}</p>{% endif %}
-
-  <label>名称
-    <input name="name" required value="{{ task.name if task else '' }}">
-  </label>
-
   <fieldset>
-    <legend>源（多选）</legend>
-    {% for f in feeds %}
-    <label>
-      <input type="checkbox" name="feeds" value="{{ f.id }}"
-        {% if task and f.id in task.feeds %}checked{% endif %}>
-      {{ f.id }} — {{ f.url }}
+    <legend>{{ "编辑任务" if task else "新建任务" }}</legend>
+    {% if error %}<p class="error">保存失败：{{ error }}</p>{% endif %}
+
+    <label>名称
+      <input name="name" required value="{{ task.name if task else '' }}"
+             placeholder="给这个推送任务起个名字，如「每日早报」">
     </label>
-    {% endfor %}
+
+    <fieldset>
+      <legend>订阅源（可多选）</legend>
+      {% if feeds %}
+      {% for f in feeds %}
+      <label class="check-inline">
+        <input type="checkbox" name="feeds" value="{{ f.id }}"
+          {% if task and f.id in task.feeds %}checked{% endif %}>
+        <span><code>{{ f.id }}</code> — {{ f.url }}</span>
+      </label>
+      {% endfor %}
+      {% else %}
+      <span class="hint">还没有订阅源，请先到「源」页面添加。</span>
+      {% endif %}
+    </fieldset>
+
+    <label>Cron 表达式
+      <input name="schedule" required value="{{ task.schedule if task else '' }}"
+             placeholder="分 时 日 月 周，如 0 7 * * *">
+      <span class="hint">五段式定时规则。用下面的按钮快速填入，或点「预览」查看接下来几次执行时间。</span>
+    </label>
+    <div class="toolbar">
+      <button type="button"
+        onclick="this.closest('form').schedule.value='0 7 * * *'">每天 07:00</button>
+      <button type="button"
+        onclick="this.closest('form').schedule.value='0 * * * *'">每小时</button>
+      <button type="button"
+        onclick="this.closest('form').schedule.value='*/30 * * * *'">每 30 分钟</button>
+      <button type="button" hx-get="/ui/cron-preview"
+        hx-target="#cron-preview" hx-swap="innerHTML"
+        hx-vals='js:{expr: document.querySelector("#task-editor [name=schedule]").value}'>
+        预览
+      </button>
+    </div>
+    <div class="probe-result" id="cron-preview"></div>
+
+    <label class="check-inline">
+      <input type="hidden" name="summarize" value="false">
+      <input type="checkbox" name="summarize" value="true"
+        {% if task and task.summarize %}checked{% endif %}>
+      为每篇文章生成 AI 摘要
+    </label>
+    <span class="hint">需要先在「设置 · AI 摘要」中配置模型。</span>
+
+    <label>推送格式
+      <select name="format">
+        <option value="epub"
+          {% if not task or task.format == 'epub' %}selected{% endif %}>EPUB（电子书，推荐）</option>
+        <option value="txt"
+          {% if task and task.format == 'txt' %}selected{% endif %}>TXT（纯文本）</option>
+      </select>
+    </label>
+
+    <label>首次执行回溯时长（小时）
+      <input type="number" name="first_run_lookback_hours" min="1"
+        value="{{ task.first_run_lookback_hours if task else 48 }}">
+      <span class="hint">任务第一次运行时，抓取最近这段时间内发布的文章。默认 48。</span>
+    </label>
+
+    <label>只推送最近 N 小时内发布的
+      <input type="number" name="max_age_hours" min="1"
+        value="{{ task.max_age_hours if task and task.max_age_hours is not none else '' }}"
+        placeholder="留空 = 不限">
+    </label>
+
+    <label>每次最多推送篇数
+      <input type="number" name="max_items" min="1"
+        value="{{ task.max_items if task and task.max_items is not none else '' }}"
+        placeholder="留空 = 不限">
+    </label>
+
+    <div class="toolbar">
+      <button type="submit">保存</button>
+      <button type="button" onclick="document.getElementById('task-form').innerHTML=''">取消</button>
+    </div>
   </fieldset>
-
-  <label>Cron 表达式
-    <input name="schedule" required value="{{ task.schedule if task else '' }}">
-  </label>
-  <div class="toolbar">
-    <button type="button"
-      onclick="this.closest('form').schedule.value='0 7 * * *'">每天 07:00</button>
-    <button type="button"
-      onclick="this.closest('form').schedule.value='0 * * * *'">每小时</button>
-    <button type="button"
-      onclick="this.closest('form').schedule.value='*/30 * * * *'">每 30 分钟</button>
-    <button type="button" hx-get="/ui/cron-preview"
-      hx-target="#cron-preview" hx-swap="innerHTML"
-      hx-vals='js:{expr: document.querySelector("#task-editor [name=schedule]").value}'>
-      预览
-    </button>
-  </div>
-  <div id="cron-preview"></div>
-
-  <label>
-    <input type="hidden" name="summarize" value="false">
-    <input type="checkbox" name="summarize" value="true"
-      {% if task and task.summarize %}checked{% endif %}>
-    AI 摘要
-  </label>
-
-  <label>格式
-    <select name="format">
-      <option value="epub"
-        {% if not task or task.format == 'epub' %}selected{% endif %}>epub</option>
-      <option value="txt"
-        {% if task and task.format == 'txt' %}selected{% endif %}>txt</option>
-    </select>
-  </label>
-
-  <label>首次执行回溯（小时）
-    <input type="number" name="first_run_lookback_hours" min="1"
-      value="{{ task.first_run_lookback_hours if task else 48 }}">
-  </label>
-
-  <label>只推送最近 N 小时内发布的（留空 = 不限）
-    <input type="number" name="max_age_hours" min="1"
-      value="{{ task.max_age_hours if task and task.max_age_hours is not none else '' }}">
-  </label>
-
-  <label>每次最多推送几篇（留空 = 不限）
-    <input type="number" name="max_items" min="1"
-      value="{{ task.max_items if task and task.max_items is not none else '' }}">
-  </label>
-
-  <div class="toolbar">
-    <button type="submit">保存</button>
-    <button type="button" onclick="document.getElementById('task-form').innerHTML=''">取消</button>
-  </div>
 </form>

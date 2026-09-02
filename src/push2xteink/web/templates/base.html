@@ -7,165 +7,511 @@
   <link rel="stylesheet" href="/static/pico.min.css">
   <script src="/static/htmx.min.js"></script>
   <style>
+    /* ===================================================================
+       push2xteink — 紫罗兰主题层（叠加在 Pico 之上）
+       =================================================================== */
     :root {
       --pico-font-size: 100%;
-      --pico-border-radius: .5rem;
+      --pico-border-radius: .6rem;
       --pico-spacing: 1rem;
-      --pico-form-element-spacing-vertical: .55rem;
-      --pico-form-element-spacing-horizontal: .8rem;
-      --nav-bg: #1b2330;
-      --nav-fg: #c9d3e0;
-      --nav-fg-active: #fff;
+      --pico-form-element-spacing-vertical: .6rem;
+      --pico-form-element-spacing-horizontal: .85rem;
+
+      /* 品牌强调色 */
+      --accent: #7c5cff;
+      --accent-hover: #6b45f5;
+      --accent-contrast: #ffffff;
+      --accent-soft: #f2efff;
+      --accent-border: #ddd4ff;
+
+      /* 页面底色与表面 */
+      --app-bg: #f7f6fb;
+      --surface: #ffffff;
+      --surface-sunken: #f4f2fa;
+      --hairline: #e7e3f2;
+
+      /* 顶部导航 */
+      --nav-bg: #221d33;
+      --nav-bg-2: #2c2542;
+      --nav-fg: #b9b2cf;
+      --nav-fg-active: #ffffff;
+
     }
 
-    body { background: var(--pico-background-color); }
+    /* Pico 主色映射到品牌紫 —— 用 :root:not([data-theme]) 提高优先级，
+       盖过 Pico 自带的浅色 / 深色定义（否则深色下会回落成蓝色）。 */
+    :root:not([data-theme]) {
+      --pico-primary: var(--accent);
+      --pico-primary-background: var(--accent);
+      --pico-primary-border: var(--accent);
+      --pico-primary-hover: var(--accent-hover);
+      --pico-primary-hover-background: var(--accent-hover);
+      --pico-primary-hover-border: var(--accent-hover);
+      --pico-primary-focus: var(--accent-focus);
+      --pico-primary-inverse: var(--accent-contrast);
+      --pico-primary-underline: rgba(124, 92, 255, .5);
+      --pico-background-color: var(--app-bg);
+      --pico-text-selection-color: var(--accent-soft);
+      --pico-form-element-active-border-color: var(--accent);
+      --pico-form-element-focus-color: var(--accent-focus);
+      --pico-switch-checked-background-color: var(--accent);
+    }
+    :root { --accent-focus: rgba(124, 92, 255, .3); }
 
-    /* ---- top navigation bar ---- */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) {
+        --accent: #9b83ff;
+        --accent-hover: #ac97ff;
+        --accent-contrast: #17121f;
+        --accent-soft: rgba(124, 92, 255, .16);
+        --accent-border: rgba(124, 92, 255, .34);
+        --accent-focus: rgba(155, 131, 255, .32);
+
+        --app-bg: #14121b;
+        --surface: #1c1926;
+        --surface-sunken: #17141f;
+        --hairline: #2c2740;
+
+        --nav-bg: #191622;
+        --nav-bg-2: #241f33;
+        --nav-fg: #a49dbd;
+        --nav-fg-active: #ffffff;
+      }
+    }
+
+    body { background: var(--app-bg); }
+
+    /* ---- 顶部导航栏 ---- */
     .app-header {
-      background: var(--nav-bg);
-      border-bottom: 1px solid rgba(255, 255, 255, .06);
+      background: linear-gradient(180deg, var(--nav-bg-2), var(--nav-bg));
+      border-bottom: 1px solid rgba(124, 92, 255, .18);
+      position: sticky;
+      top: 0;
+      z-index: 20;
     }
     .app-header > .container {
       display: flex;
       align-items: center;
-      gap: 1.5rem;
+      gap: 1.25rem;
       padding-top: .7rem;
       padding-bottom: .7rem;
+      flex-wrap: wrap;
     }
     .app-header .brand {
-      font-weight: 700;
-      letter-spacing: .01em;
+      font-weight: 800;
+      letter-spacing: .02em;
       color: #fff;
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .app-header .brand::before {
+      content: "";
+      width: .55rem;
+      height: 1.15rem;
+      border-radius: 2px;
+      background: linear-gradient(180deg, #a58bff, var(--accent));
+      box-shadow: 0 0 12px rgba(124, 92, 255, .6);
     }
     .app-header nav {
       display: flex;
-      gap: .35rem;
+      gap: .3rem;
       flex-wrap: wrap;
     }
     .app-header nav a {
       color: var(--nav-fg);
       text-decoration: none;
-      padding: .3rem .7rem;
+      padding: .5rem .85rem;
       border-radius: var(--pico-border-radius);
-      font-weight: 500;
+      font-weight: 600;
+      font-size: .95rem;
+      line-height: 1;
       transition: background .15s, color .15s;
     }
     .app-header nav a:hover {
       color: var(--nav-fg-active);
-      background: rgba(255, 255, 255, .07);
+      background: rgba(255, 255, 255, .08);
     }
     .app-header nav a.active {
       color: var(--nav-fg-active);
-      background: rgba(255, 255, 255, .14);
+      background: linear-gradient(180deg, rgba(124, 92, 255, .5), rgba(124, 92, 255, .3));
+      box-shadow: inset 0 -2px 0 var(--accent);
     }
 
     main.container { padding-top: 2rem; padding-bottom: 4rem; }
-    h1 { margin-bottom: 1.25rem; }
+
+    /* ---- 页面标题 ---- */
+    .page-head { margin-bottom: 1.5rem; }
+    .page-head h1 { margin-bottom: .3rem; }
+    .page-head .subtitle {
+      color: var(--pico-muted-color);
+      font-size: .95rem;
+      margin: 0;
+    }
+
+    /* ---- 卡片包裹（表格 / 列表容器）---- */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: calc(var(--pico-border-radius) + .2rem);
+      box-shadow: 0 1px 2px rgba(20, 12, 40, .04), 0 8px 24px -18px rgba(20, 12, 40, .3);
+      overflow: hidden;
+    }
+    .panel > .table-wrap { margin: 0; }
 
     .table-wrap { overflow-x: auto; }
-    .table-wrap table { min-width: 640px; }
+    .table-wrap table { min-width: 640px; margin: 0; }
 
-    /* ---- tables ---- */
-    table { font-size: .925rem; }
-    th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; opacity: .7; }
-    td, th { padding: .55rem .7rem; vertical-align: middle; }
-    tbody tr:hover > td { background: var(--pico-card-sectioning-background-color); }
+    /* ---- 表格 ---- */
+    table { font-size: .93rem; }
+    thead th {
+      font-size: .74rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--pico-muted-color);
+      background: var(--surface-sunken);
+      border-bottom: 1px solid var(--hairline);
+      font-weight: 700;
+    }
+    td, th { padding: .7rem .8rem; vertical-align: middle; }
+    tbody tr { transition: background .12s; }
+    tbody tr:hover > td { background: var(--accent-soft); }
+    tbody td { border-bottom: 1px solid var(--hairline); }
+    tbody tr:last-child td { border-bottom: 0; }
 
-    /* ---- inline action buttons in tables / toolbars ---- */
+    /* ---- 工具栏 ---- */
     .toolbar {
       display: flex;
       flex-wrap: wrap;
-      gap: .5rem;
+      gap: .55rem;
       align-items: center;
-      margin: 1rem 0;
+      margin: 1rem 0 1.25rem;
     }
     .toolbar > * { margin: 0; }
-    .toolbar button, .toolbar [type="submit"], .toolbar [type="button"] { width: auto; }
+    .toolbar button,
+    .toolbar [type="submit"],
+    .toolbar [type="button"] { width: auto; }
+    .toolbar input:not([type="checkbox"]):not([type="radio"]) { margin: 0; min-width: 12rem; }
 
-    td button, main fieldset button[type="button"], .toolbar button[type="button"] {
+    /* ---- 按钮分级 ----
+       主操作：实心强调色（Pico 默认 button / [type=submit]）
+       次要操作：.btn-ghost 或表格内 button
+       危险操作：.btn-danger */
+    button, [type="submit"], [type="button"], [role="button"] {
+      font-weight: 600;
+      letter-spacing: .01em;
+    }
+
+    .btn-ghost,
+    td button,
+    main fieldset button[type="button"],
+    .toolbar button[type="button"] {
       width: auto;
       display: inline-block;
-      margin: .1rem .2rem .1rem 0;
-      padding: .3rem .7rem;
+      margin: .12rem .25rem .12rem 0;
+      padding: .38rem .8rem;
       font-size: .85rem;
-      --pico-background-color: var(--pico-secondary-background);
-      --pico-border-color: var(--pico-secondary-background);
-      --pico-color: var(--pico-secondary-inverse);
+      border-radius: .5rem;
+      background: var(--surface);
+      border: 1px solid var(--accent-border);
+      color: var(--accent);
+      --pico-background-color: var(--surface);
+      --pico-border-color: var(--accent-border);
+      --pico-color: var(--accent);
     }
-    td button:hover, main fieldset button[type="button"]:hover, .toolbar button[type="button"]:hover {
-      --pico-background-color: var(--pico-secondary-hover-background);
-      --pico-border-color: var(--pico-secondary-hover-background);
+    .btn-ghost:hover,
+    td button:hover,
+    main fieldset button[type="button"]:hover,
+    .toolbar button[type="button"]:hover {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      --pico-background-color: var(--accent-soft);
+      --pico-border-color: var(--accent);
     }
 
-    /* ---- status badges (Pico has no badge component) ---- */
+    .btn-danger,
+    td button.btn-danger {
+      background: transparent;
+      border-color: #e2999b;
+      color: #c0392f;
+      --pico-background-color: transparent;
+      --pico-border-color: #e2999b;
+      --pico-color: #c0392f;
+    }
+    .btn-danger:hover,
+    td button.btn-danger:hover {
+      background: rgba(220, 76, 76, .1);
+      border-color: #c0392f;
+      --pico-background-color: rgba(220, 76, 76, .1);
+      --pico-border-color: #c0392f;
+    }
+    @media (prefers-color-scheme: dark) {
+      .btn-danger, td button.btn-danger { color: #ff9c9c; border-color: rgba(255, 120, 120, .4); --pico-color: #ff9c9c; }
+    }
+
+    /* ---- 状态徽章 ---- */
     .badge {
       display: inline-block;
-      padding: .15rem .55rem;
+      padding: .2rem .6rem;
       border-radius: 1rem;
       font-size: .78rem;
-      font-weight: 600;
-      line-height: 1.4;
-      background: var(--pico-secondary-background);
-      color: var(--pico-secondary-inverse);
+      font-weight: 700;
+      line-height: 1.5;
+      border: 1px solid transparent;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent-border);
       white-space: nowrap;
     }
-    .badge-success { background: #d1f0dc; color: #12512c; }
-    .badge-failed  { background: #f8d7d7; color: #7a1a1a; }
-    .badge-skipped { background: #e6e6e9; color: #4a4a52; }
-    .badge-running { background: #d5e3fb; color: #1c3d86; }
+    .badge-success { background: #dcf5e5; color: #12683a; border-color: #a6e3c0; }
+    .badge-failed  { background: #fce0df; color: #a5271e; border-color: #f2b7b4; }
+    .badge-skipped { background: #ecebf0; color: #565463; border-color: #d9d7e0; }
+    .badge-running { background: #dde6fb; color: #2647a6; border-color: #b8c9f4; }
     @media (prefers-color-scheme: dark) {
-      .badge-success { background: rgba(46, 160, 87, .22); color: #7ee2a1; }
-      .badge-failed  { background: rgba(220, 76, 76, .22); color: #ff9c9c; }
-      .badge-skipped { background: rgba(160, 160, 170, .2); color: #c2c2cc; }
-      .badge-running { background: rgba(66, 122, 232, .24); color: #9fc0ff; }
+      .badge         { background: var(--accent-soft); color: #c9bcff; border-color: var(--accent-border); }
+      .badge-success { background: rgba(46, 160, 87, .2); color: #7ee2a1; border-color: rgba(46, 160, 87, .35); }
+      .badge-failed  { background: rgba(220, 76, 76, .2); color: #ff9c9c; border-color: rgba(220, 76, 76, .38); }
+      .badge-skipped { background: rgba(160, 160, 170, .18); color: #c2c2cc; border-color: rgba(160, 160, 170, .3); }
+      .badge-running { background: rgba(66, 122, 232, .24); color: #9fc0ff; border-color: rgba(66, 122, 232, .4); }
     }
 
-    /* ---- inline feedback messages ---- */
+    /* ---- 内联反馈消息 ---- */
     .error, .ok {
       display: block;
-      padding: .5rem .75rem;
+      padding: .6rem .8rem .6rem .85rem;
       border-radius: var(--pico-border-radius);
-      margin: .5rem 0;
+      margin: .6rem 0;
       font-size: .9rem;
+      border: 1px solid transparent;
     }
-    .error { background: rgba(220, 76, 76, .14); color: var(--pico-color); border-left: 3px solid #dc4c4c; }
-    .ok    { background: rgba(46, 160, 87, .14); color: var(--pico-color); border-left: 3px solid #2ea057; }
-    .hint  { color: var(--pico-muted-color); font-size: .85rem; }
-    .hint + .hint, label + .hint { margin-left: .4rem; }
-
-    /* ---- forms ---- */
-    fieldset {
-      margin: 1.25rem 0;
-      padding: 1rem 1.25rem;
-      border: 1px solid var(--pico-muted-border-color);
-      border-radius: var(--pico-border-radius);
-      background: var(--pico-card-sectioning-background-color);
+    .error {
+      background: rgba(220, 76, 76, .1);
+      color: var(--pico-color);
+      border-color: rgba(220, 76, 76, .25);
+      border-left: 3px solid #dc4c4c;
     }
-    fieldset > legend {
-      font-weight: 700;
-      padding: 0 .4rem;
-      text-transform: uppercase;
-      font-size: .8rem;
-      letter-spacing: .04em;
+    .ok {
+      background: rgba(46, 160, 87, .1);
+      color: var(--pico-color);
+      border-color: rgba(46, 160, 87, .25);
+      border-left: 3px solid #2ea057;
+    }
+    .hint {
+      display: block;
       color: var(--pico-muted-color);
+      font-size: .82rem;
+      margin-top: .25rem;
+      font-weight: 400;
+      line-height: 1.5;
     }
-    fieldset > legend + .hint { margin-top: -.25rem; }
+    form > fieldset > .hint,
+    form fieldset > .hint,
+    label + .hint,
+    .check-inline + .hint { margin-bottom: .9rem; }
+    form label > .hint:last-child { margin-bottom: 1rem; }
+    form label:last-child > .hint:last-child { margin-bottom: 0; }
+    .hint code {
+      font-size: .95em;
+      background: var(--surface-sunken);
+      padding: .05rem .3rem;
+      border-radius: .3rem;
+    }
+    .hint--inline { display: inline; margin-left: .4rem; }
+
+    /* ---- 表单 ---- */
+    main fieldset {
+      margin: 1.25rem 0;
+      padding: 1.1rem 1.25rem 1.25rem;
+      border: 1px solid var(--hairline);
+      border-radius: calc(var(--pico-border-radius) + .1rem);
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(20, 12, 40, .04);
+    }
+    main fieldset > legend {
+      font-weight: 800;
+      padding: .1rem .5rem;
+      font-size: .82rem;
+      letter-spacing: .03em;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      border-radius: .4rem;
+    }
+    main fieldset > legend + .hint { margin-top: .1rem; margin-bottom: .6rem; }
+    form label { font-weight: 600; }
+    form label > input,
+    form label > select,
+    form label > textarea { font-weight: 400; }
     form label > input[type="checkbox"] { margin-right: .4rem; }
     label.check-inline {
       display: flex;
       align-items: center;
-      gap: .45rem;
+      gap: .5rem;
       margin: .85rem 0;
+      font-weight: 600;
     }
-    label.check-inline > input { margin: 0; }
-    details > summary { cursor: pointer; }
+    label.check-inline > input { margin: 0; width: 1.15rem; height: 1.15rem; }
+
+    input:not([type="checkbox"]):not([type="radio"]),
+    select, textarea {
+      background: var(--surface);
+      border-color: var(--hairline);
+    }
+    input:focus:not([type="checkbox"]):not([type="radio"]),
+    select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 .18rem var(--pico-primary-focus);
+    }
+
+    details > summary { cursor: pointer; font-weight: 600; color: var(--accent); }
     details > pre {
       white-space: pre-wrap;
       word-break: break-word;
-      background: var(--pico-code-background-color);
-      padding: .6rem .75rem;
+      background: var(--surface-sunken);
+      border: 1px solid var(--hairline);
+      padding: .7rem .8rem;
       border-radius: var(--pico-border-radius);
       font-size: .82rem;
+      margin-top: .5rem;
+    }
+
+    .probe-result:empty { display: none; }
+    .probe-result { margin-top: .5rem; }
+    /* 折叠没有测试结果的空行 */
+    tr.feed-test-row:has(.probe-result:empty) { display: none; }
+
+    /* ===================================================================
+       移动端适配
+       =================================================================== */
+    @media (max-width: 640px) {
+      .app-header > .container {
+        gap: .6rem .9rem;
+        padding-top: .6rem;
+        padding-bottom: .6rem;
+      }
+      .app-header > .container { flex-wrap: nowrap; }
+      .app-header nav {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: .2rem;
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .app-header nav a {
+        text-align: center;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: .5rem .3rem;
+        font-size: .9rem;
+      }
+
+      main.container { padding-top: 1.25rem; }
+
+      /* 表单单列、输入框 16px 防 iOS 缩放 */
+      input:not([type="checkbox"]):not([type="radio"]),
+      select, textarea { font-size: 16px; }
+
+      /* 工具栏：输入/提交整行，成组的普通按钮两列排布 */
+      .toolbar { flex-flow: row wrap; align-items: stretch; gap: .5rem; }
+      .toolbar > input:not([type="checkbox"]):not([type="radio"]),
+      .toolbar > [type="submit"],
+      .toolbar > label.check-inline { flex: 1 1 100%; min-width: 0; }
+      .toolbar > [type="button"] { flex: 1 1 calc(50% - .5rem); width: auto; margin: 0; }
+      .toolbar > [type="submit"],
+      .toolbar > button:not([type="button"]) { flex: 1 1 100%; width: 100%; }
+      .toolbar label.check-inline { justify-content: flex-start; margin: .3rem 0; }
+      label.check-inline { margin: .6rem 0; }
+
+      /* --- 宽表格 -> 堆叠卡片 --- */
+      .table-wrap { overflow-x: visible; }
+      table.cards { display: block; min-width: 0; width: 100%; font-size: .95rem; }
+      table.cards thead { display: none; }
+      table.cards tbody { display: block; }
+      table.cards tr { display: block; width: 100%; }
+      table.cards tr {
+        background: var(--surface);
+        border: 1px solid var(--hairline);
+        border-radius: var(--pico-border-radius);
+        padding: .35rem .2rem;
+        margin: 0 0 .8rem;
+        box-shadow: 0 1px 2px rgba(20, 12, 40, .05);
+      }
+      table.cards tbody tr:hover > td { background: transparent; }
+      table.cards td {
+        border: 0;
+        border-bottom: 1px dashed var(--hairline);
+        padding: .5rem .8rem;
+        display: grid;
+        grid-template-columns: minmax(4.5rem, max-content) 1fr;
+        align-items: center;
+        gap: .25rem 1rem;
+        text-align: right;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      table.cards tr td:last-child { border-bottom: 0; }
+      table.cards td[data-label]::before {
+        content: attr(data-label);
+        font-size: .74rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+        color: var(--pico-muted-color);
+        text-align: left;
+      }
+      table.cards td[data-label] > * {
+        min-width: 0;
+        max-width: 100%;
+        justify-self: end;
+      }
+      table.cards td[data-label] > button { width: auto; }
+      table.cards td:empty,
+      table.cards td.cell-actions:not([data-label]) { display: none; }
+      /* 源测试结果行：整行铺开，无标签、无虚线 */
+      table.cards .feed-test-row { border: 0; background: transparent; box-shadow: none; padding: 0; margin: -.6rem 0 .8rem; }
+      table.cards .feed-test-row td { display: block; padding: 0 .2rem; }
+      table.cards .feed-test-row td:has(.probe-result:empty) { display: none; }
+      /* 操作单元格：标签在上，按钮整行铺开 */
+      table.cards td.cell-actions {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        text-align: left;
+        gap: 0;
+      }
+      table.cards td.cell-actions button {
+        width: 100%;
+        margin: .15rem 0;
+        text-align: center;
+      }
+      table.cards td.cell-actions::before { margin-bottom: .1rem; }
+
+      /* 源编辑行：每个字段纵向铺开，标签在上 */
+      table.cards .feed-edit-row td {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        text-align: left;
+        gap: .3rem;
+      }
+      table.cards .feed-edit-row td::before { text-align: left; }
+      table.cards .feed-edit-row td > input[name="url"] { width: 100%; min-width: 0; }
+      table.cards .feed-edit-row td:has(> input[type="checkbox"]) {
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+        gap: .6rem;
+      }
+      table.cards .feed-edit-row td > input[type="checkbox"] { width: 1.2rem; height: 1.2rem; margin: 0; }
+      table.cards .feed-edit-row td.cell-actions { gap: 0; }
+
+      details > pre { font-size: .78rem; }
+    }
+
+    @media (max-width: 380px) {
+      .app-header .brand { font-size: 1rem; }
     }
   </style>
 </head>

@@ -1,7 +1,7 @@
 {% if error %}
 <p class="error">拉取失败：{{ error }}</p>
 {% else %}
-<p>最新 {{ entries | length }} 条：</p>
+<p class="ok">✓ 拉取成功，最新 {{ entries | length }} 条：</p>
 <ul>
   {% for e in entries %}
   <li>

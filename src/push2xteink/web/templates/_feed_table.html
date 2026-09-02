@@ -1,39 +1,43 @@
 <div id="feed-table">
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <div class="panel">
   <div class="table-wrap">
-  <table>
+  <table class="cards">
     <thead>
-      <tr><th>id</th><th>URL</th><th>全文</th><th>代理</th><th>操作</th></tr>
+      <tr><th>ID</th><th>地址</th><th>全文提取</th><th>走代理</th><th>操作</th></tr>
     </thead>
     <tbody>
       {% for f in feeds %}
-      <tr id="feed-row-{{ f.id }}">
-        <td>{{ f.id }}</td>
-        <td><input name="url" value="{{ f.url }}" size="40" required
+      <tr id="feed-row-{{ f.id }}" class="feed-edit-row">
+        <td data-label="ID"><code>{{ f.id }}</code></td>
+        <td data-label="地址"><input name="url" value="{{ f.url }}" size="40" required
                    type="url" pattern="https?://.*"></td>
-        <td>
+        <td data-label="全文提取">
           <input type="hidden" name="full_text" value="false">
           <input type="checkbox" name="full_text" value="true"
             {% if f.full_text %}checked{% endif %}>
         </td>
-        <td>
+        <td data-label="走代理">
           <input type="hidden" name="use_proxy" value="false">
           <input type="checkbox" name="use_proxy" value="true"
             {% if f.use_proxy %}checked{% endif %}>
         </td>
-        <td>
+        <td class="cell-actions" data-label="操作">
           <button hx-post="/feeds/{{ f.id }}" hx-include="closest tr"
                   hx-target="#feed-table" hx-swap="outerHTML">保存</button>
           <button hx-post="/ui/feeds/{{ f.id }}/test"
                   hx-target="#feed-test-{{ f.id }}" hx-swap="innerHTML">测试</button>
-          <button hx-delete="/feeds/{{ f.id }}"
+          <button class="btn-danger" hx-delete="/feeds/{{ f.id }}"
                   hx-target="#feed-table" hx-swap="outerHTML"
                   hx-confirm="删除源 {{ f.id }}？">删除</button>
         </td>
       </tr>
-      <tr><td colspan="5"><div id="feed-test-{{ f.id }}"></div></td></tr>
+      <tr class="feed-test-row"><td colspan="5"><div class="probe-result" id="feed-test-{{ f.id }}"></div></td></tr>
+      {% else %}
+      <tr><td colspan="5" style="text-align:center;color:var(--pico-muted-color)">还没有源，用上面的输入框添加第一个。</td></tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
   </div>
 </div>

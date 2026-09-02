@@ -1,12 +1,17 @@
 {% extends "base.html" %}
 {% block title %}任务 - push2xteink{% endblock %}
 {% block content %}
-<h1>推送任务</h1>
+<div class="page-head">
+  <h1>推送任务</h1>
+  <p class="subtitle">按 Cron 定时把订阅源里的新文章打包成 EPUB / TXT，推送到你的墨水屏设备。</p>
+</div>
 <div class="toolbar">
-  <button hx-get="/tasks/new" hx-target="#task-form" hx-swap="innerHTML">新建任务</button>
+  <button hx-get="/tasks/new" hx-target="#task-form" hx-swap="innerHTML">+ 新建任务</button>
 </div>
 <div id="task-form"></div>
-<div class="table-wrap">
-{% include "_task_table.html" %}
+<div class="panel">
+  <div class="table-wrap">
+  {% include "_task_table.html" %}
+  </div>
 </div>
 {% endblock %}
